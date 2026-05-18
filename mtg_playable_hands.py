@@ -9,7 +9,6 @@ INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
 CACHE_VERSION = '5'
 
-# Basic land names -> color they produce. These NEVER need Scryfall lookup.
 BASIC_LANDS = {
     'plains':   ['W'],
     'island':   ['U'],
@@ -19,7 +18,6 @@ BASIC_LANDS = {
     'wastes':   ['C'],
 }
 
-# Land subtype -> mana symbol (for non-basic lands with basic subtypes)
 SUBTYPE_MANA = {
     'plains':   'W',
     'island':   'U',
@@ -40,7 +38,6 @@ def fetch_json(url: str):
 
 
 def infer_produced_from_type(type_line: str):
-    """Infer mana production from land subtype (e.g. 'Basic Land \u2014 Island' -> ['U'])."""
     tl = (type_line or '').lower()
     produced = []
     after_dash = tl.split('\u2014')[-1] if '\u2014' in tl else tl.split('-')[-1]
@@ -77,7 +74,6 @@ def ensure_bulk_data():
                 names.add(normalize_name(face['name']))
         type_line = card.get('type_line', '')
         produced = list(card.get('produced_mana') or [])
-        # Always supplement with type-line inference for lands
         if 'land' in type_line.lower():
             for c in infer_produced_from_type(type_line):
                 if c not in produced:
@@ -104,12 +100,16 @@ def parse_mana_cost_symbols(mana_cost: str):
     counts = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0, 'generic': 0}
     for sym in re.findall(r'\{([^}]+)\}', mana_cost or ''):
         s = sym.upper()
-        if s.isdigit(): counts['generic'] += int(s)
-        elif s in counts: counts[s] += 1
+        if s.isdigit():
+            counts['generic'] += int(s)
+        elif s in counts:
+            counts[s] += 1
         elif '/' in s:
             parts = [p for p in s.split('/') if p in counts]
-            if len(parts) == 1: counts[parts[0]] += 1
-            else: counts['generic'] += 1
+            if len(parts) == 1:
+                counts[parts[0]] += 1
+            else:
+                counts['generic'] += 1
         elif s not in {'X', 'Y', 'Z'}:
             counts['generic'] += 1
     return counts
@@ -135,17 +135,11 @@ def summarize_face_data(card):
 
 def classify_card(entry, card):
     norm = entry['normalized']
-
-    # --- BASIC LAND FAST PATH ---
-    # Check by normalized input name first (handles 'island', 'plains', etc.)
     basic_colors = BASIC_LANDS.get(norm)
     if basic_colors is None:
-        # Also check the card's actual name from Scryfall
         basic_colors = BASIC_LANDS.get((card.get('name') or '').lower().strip())
-
     if basic_colors is not None:
-        type_line = card.get('type_line', f'Basic Land')
-        cost_syms = parse_mana_cost_symbols('')
+        type_line = card.get('type_line', 'Basic Land')
         return {
             **entry,
             'name': card.get('name', entry['inputName']),
@@ -158,10 +152,8 @@ def classify_card(entry, card):
             'isLand': True,
             'isPermanent': True,
             'isManaPermanent': False,
-            'costSymbols': cost_syms,
+            'costSymbols': parse_mana_cost_symbols(''),
         }
-
-    # --- NORMAL SCRYFALL PATH ---
     face = summarize_face_data(card)
     type_line = face['type_line'].lower()
     is_land = 'land' in type_line
@@ -199,68 +191,142 @@ def parse_decklist(text: str):
     return cards
 
 
-def can_pay_cost(cost, available):
-    pool = dict(available)
+def can_pay_cost(cost, pool):
+    """Check if pool can pay cost. Modifies nothing — works on a copy."""
+    remaining = dict(pool)
     for c in ['W', 'U', 'B', 'R', 'G', 'C']:
-        if pool.get(c, 0) < cost.get(c, 0):
+        need = cost.get(c, 0)
+        if remaining.get(c, 0) < need:
             return False
-        pool[c] = pool.get(c, 0) - cost.get(c, 0)
-    return sum(pool.values()) >= cost.get('generic', 0)
+        remaining[c] -= need
+    generic = cost.get('generic', 0)
+    return sum(remaining.values()) >= generic
 
 
-def choose_land_production(lands, desired_costs):
+def spend_mana(cost, pool):
+    """Return new pool after paying cost. Spends colored first, then generic from surplus."""
+    remaining = dict(pool)
+    for c in ['W', 'U', 'B', 'R', 'G', 'C']:
+        remaining[c] = remaining.get(c, 0) - cost.get(c, 0)
+    generic = cost.get('generic', 0)
+    for c in ['C', 'G', 'R', 'B', 'U', 'W']:
+        if generic <= 0:
+            break
+        use = min(remaining.get(c, 0), generic)
+        remaining[c] -= use
+        generic -= use
+    return remaining
+
+
+def build_mana_pool(lands_on_battlefield, mana_perms_on_battlefield, desired):
+    """
+    Build a mana pool from lands and mana permanents.
+    Each source picks its color greedily based on what the desired cost needs.
+    Returns (pool dict, list of source names used).
+    """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
-    for land in lands:
-        opts = land['produced_mana'] if land['produced_mana'] else ['C']
-        chosen = next((c for c in opts if desired_costs.get(c, 0) > 0), opts[0])
-        pool[chosen] += 1
-    return pool
-
-
-def available_mana_for_turn(hand, battlefield, lands_played):
-    lands_in_play = [c for c in hand if c['isLand']][:lands_played]
-    desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
-    for c in [x for x in hand if not x['isLand']]:
-        for color in ['W', 'U', 'B', 'R', 'G', 'C']:
-            desired[color] += c['costSymbols'].get(color, 0)
-    pool = choose_land_production(lands_in_play, desired)
-    for perm in [x for x in battlefield if x['isManaPermanent']]:
-        opts = perm['produced_mana'] if perm['produced_mana'] else ['C']
+    sources_used = []
+    for source in lands_on_battlefield + mana_perms_on_battlefield:
+        opts = source.get('produced_mana') or ['C']
+        # pick color that satisfies a specific cost requirement first
         chosen = next((c for c in opts if desired.get(c, 0) > 0), opts[0])
-        pool[chosen] += 1
-    return {'pool': pool, 'total': sum(pool.values())}
-
-
-def castable_cards(hand, battlefield, lands_played):
-    mana = available_mana_for_turn(hand, battlefield, lands_played)
-    return [c for c in hand if (not c['isLand']) and c['manaValue'] <= mana['total'] and can_pay_cost(c['costSymbols'], mana['pool'])]
+        pool[chosen] = pool.get(chosen, 0) + 1
+        sources_used.append(source['name'])
+    return pool, sources_used
 
 
 def evaluate_opening(deck, turns_seen=3):
-    seen = deck[:7 + turns_seen]
-    hand = list(seen)
-    battlefield = []
+    """
+    Properly simulate turns 1-3 with a real state machine.
+    - opening_hand: first 7 cards
+    - Each turn: draw a card (turn 2+), play a land from hand if available,
+      build mana pool from battlefield, find best castable spell, cast it.
+    - Returns playable/curve stats + rich sequence for display.
+    """
+    opening_hand = deck[:7]
+    draw_pile = deck[7:]
+
+    hand = list(opening_hand)
+    lands_in_play = []       # lands actually played to battlefield
+    mana_perms_in_play = []  # mana permanents on battlefield
+    nonmana_perms_in_play = []
+
     curve_ok = True
     has_play = False
-    sequence = []
+    turns = []
+
     for turn in range(1, 4):
-        lands_played = min(turn, sum(1 for c in hand if c['isLand']))
-        mana = available_mana_for_turn(hand, battlefield, lands_played)
-        if mana['total'] < turn:
+        turn_log = {'turn': turn, 'drew': None, 'landPlayed': None, 'manaPool': {}, 'manaSources': [], 'cast': None}
+
+        # Draw a card on turns 2+
+        if turn > 1 and draw_pile:
+            drawn = draw_pile.pop(0)
+            hand.append(drawn)
+            turn_log['drew'] = drawn['name']
+
+        # Play a land from hand if we have one
+        land_candidates = [c for c in hand if c['isLand']]
+        if land_candidates:
+            # Prefer a land that produces colors we need for cards in hand
+            desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
+            for c in [x for x in hand if not x['isLand']]:
+                for color in ['W', 'U', 'B', 'R', 'G', 'C']:
+                    desired[color] += c['costSymbols'].get(color, 0)
+            def land_score(land):
+                opts = land.get('produced_mana') or ['C']
+                return sum(desired.get(c, 0) for c in opts)
+            land_to_play = max(land_candidates, key=land_score)
+            hand.remove(land_to_play)
+            lands_in_play.append(land_to_play)
+            turn_log['landPlayed'] = land_to_play['name']
+
+        # Build mana pool from all sources on battlefield
+        desired_for_pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
+        for c in [x for x in hand if not x['isLand']]:
+            for color in ['W', 'U', 'B', 'R', 'G', 'C']:
+                desired_for_pool[color] += c['costSymbols'].get(color, 0)
+        pool, sources = build_mana_pool(lands_in_play, mana_perms_in_play, desired_for_pool)
+        turn_log['manaPool'] = {k: v for k, v in pool.items() if v > 0}
+        turn_log['manaSources'] = sources
+        total_mana = sum(pool.values())
+
+        # Check curve: we should have at least `turn` mana available
+        if total_mana < turn:
             curve_ok = False
-        options = castable_cards(hand, battlefield, lands_played)
-        options.sort(key=lambda c: ((2 if c['isManaPermanent'] else 0) + c['manaValue']), reverse=True)
-        playable = [c for c in options if c['manaValue'] <= turn]
-        if playable:
+
+        # Find best castable spell from hand
+        castable = [
+            c for c in hand
+            if not c['isLand']
+            and c['manaValue'] <= total_mana
+            and can_pay_cost(c['costSymbols'], pool)
+        ]
+
+        # Sort: prefer mana permanents, then by mana value descending (play the most expensive thing we can)
+        castable.sort(key=lambda c: (2 if c['isManaPermanent'] else 0) + c['manaValue'], reverse=True)
+
+        if castable:
             has_play = True
-            chosen = playable[0]
-            sequence.append({'turn': turn, 'card': chosen['name']})
-            idx = next((i for i, h in enumerate(hand) if h['name'] == chosen['name'] and h['mana_cost'] == chosen['mana_cost']), -1)
-            if idx >= 0:
-                cast_card = hand.pop(idx)
-                if cast_card['isPermanent']:
-                    battlefield.append(cast_card)
-    return {'playable': curve_ok and has_play, 'curveOk': curve_ok, 'hasPlayByTurn3': has_play, 'sequence': sequence}
+            chosen = castable[0]
+            turn_log['cast'] = {'name': chosen['name'], 'manaCost': chosen['mana_cost'], 'mv': chosen['manaValue']}
+            hand.remove(chosen)
+            pool = spend_mana(chosen['costSymbols'], pool)
+            if chosen['isPermanent']:
+                if chosen['isManaPermanent']:
+                    mana_perms_in_play.append(chosen)
+                else:
+                    nonmana_perms_in_play.append(chosen)
+
+        turns.append(turn_log)
+
+    playable = curve_ok and has_play
+    return {
+        'playable': playable,
+        'curveOk': curve_ok,
+        'hasPlayByTurn3': has_play,
+        'openingHand': [c['name'] for c in opening_hand],
+        'turns': turns,
+    }
 
 
 def hydrate_deck(deck_text: str):
@@ -268,10 +334,16 @@ def hydrate_deck(deck_text: str):
     parsed = parse_decklist(deck_text)
     resolved, missing = [], []
     for item in parsed:
-        # Basic lands don't need Scryfall — handle directly
         if item['normalized'] in BASIC_LANDS:
-            # Build a minimal stub so classify_card can fast-path
-            stub = {'name': item['inputName'].strip(), 'type_line': 'Basic Land', 'mana_cost': '', 'cmc': 0, 'colors': [], 'color_identity': BASIC_LANDS[item['normalized']], 'produced_mana': BASIC_LANDS[item['normalized']], 'card_faces': []}
+            stub = {
+                'name': item['inputName'].strip(),
+                'type_line': 'Basic Land',
+                'mana_cost': '', 'cmc': 0,
+                'colors': [],
+                'color_identity': BASIC_LANDS[item['normalized']],
+                'produced_mana': BASIC_LANDS[item['normalized']],
+                'card_faces': []
+            }
             resolved.append(classify_card(item, stub))
             continue
         card = index.get(item['normalized'])
@@ -286,20 +358,23 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
     hydrated, missing = hydrate_deck(deck_text)
     if not hydrated:
         raise RuntimeError('No cards could be resolved from bulk data')
-    playable = curve_ok = has_play = 0
+    playable_count = curve_ok_count = has_play_count = 0
     examples = []
-    for i in range(simulations):
+    for _ in range(simulations):
         deck = hydrated[:]
         random.shuffle(deck)
         res = evaluate_opening(deck, turns_seen=turns_seen)
         if res['playable']:
-            playable += 1
-            if len(examples) < 5:
-                examples.append(res['sequence'])
+            playable_count += 1
+            if len(examples) < 6:
+                examples.append({
+                    'openingHand': res['openingHand'],
+                    'turns': res['turns'],
+                })
         if res['curveOk']:
-            curve_ok += 1
+            curve_ok_count += 1
         if res['hasPlayByTurn3']:
-            has_play += 1
+            has_play_count += 1
     lands = sum(1 for c in hydrated if c['isLand'])
     mana_perms = sum(1 for c in hydrated if c['isManaPermanent'])
     nonlands = [c for c in hydrated if not c['isLand']]
@@ -315,9 +390,9 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
         'simulations': simulations,
         'turnsSeen': turns_seen,
         'results': {
-            'playableHandsPct': round(playable / simulations * 100, 4),
-            'onOrAboveCurveThroughTurn3Pct': round(curve_ok / simulations * 100, 4),
-            'hasPlayableSpellByTurn3Pct': round(has_play / simulations * 100, 4)
+            'playableHandsPct': round(playable_count / simulations * 100, 4),
+            'onOrAboveCurveThroughTurn3Pct': round(curve_ok_count / simulations * 100, 4),
+            'hasPlayableSpellByTurn3Pct': round(has_play_count / simulations * 100, 4)
         },
         'exampleSequences': examples
     }
