@@ -192,7 +192,6 @@ def parse_decklist(text: str):
 
 
 def can_pay_cost(cost, pool):
-    """Check if pool can pay cost. Modifies nothing — works on a copy."""
     remaining = dict(pool)
     for c in ['W', 'U', 'B', 'R', 'G', 'C']:
         need = cost.get(c, 0)
@@ -204,7 +203,6 @@ def can_pay_cost(cost, pool):
 
 
 def spend_mana(cost, pool):
-    """Return new pool after paying cost. Spends colored first, then generic from surplus."""
     remaining = dict(pool)
     for c in ['W', 'U', 'B', 'R', 'G', 'C']:
         remaining[c] = remaining.get(c, 0) - cost.get(c, 0)
@@ -219,16 +217,10 @@ def spend_mana(cost, pool):
 
 
 def build_mana_pool(lands_on_battlefield, mana_perms_on_battlefield, desired):
-    """
-    Build a mana pool from lands and mana permanents.
-    Each source picks its color greedily based on what the desired cost needs.
-    Returns (pool dict, list of source names used).
-    """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
     for source in lands_on_battlefield + mana_perms_on_battlefield:
         opts = source.get('produced_mana') or ['C']
-        # pick color that satisfies a specific cost requirement first
         chosen = next((c for c in opts if desired.get(c, 0) > 0), opts[0])
         pool[chosen] = pool.get(chosen, 0) + 1
         sources_used.append(source['name'])
@@ -237,18 +229,17 @@ def build_mana_pool(lands_on_battlefield, mana_perms_on_battlefield, desired):
 
 def evaluate_opening(deck, turns_seen=3):
     """
-    Properly simulate turns 1-3 with a real state machine.
-    - opening_hand: first 7 cards
-    - Each turn: draw a card (turn 2+), play a land from hand if available,
-      build mana pool from battlefield, find best castable spell, cast it.
-    - Returns playable/curve stats + rich sequence for display.
+    Simulate turns 1-3 with a proper state machine.
+    In Commander, every player draws on every turn (including turn 1).
+    opening_hand = 7 cards dealt before the game starts.
+    Each turn: draw 1, play a land, build mana pool, cast best spell.
     """
     opening_hand = deck[:7]
-    draw_pile = deck[7:]
+    draw_pile = deck[7:]  # cards drawn on T1, T2, T3 come from here
 
     hand = list(opening_hand)
-    lands_in_play = []       # lands actually played to battlefield
-    mana_perms_in_play = []  # mana permanents on battlefield
+    lands_in_play = []
+    mana_perms_in_play = []
     nonmana_perms_in_play = []
 
     curve_ok = True
@@ -258,16 +249,15 @@ def evaluate_opening(deck, turns_seen=3):
     for turn in range(1, 4):
         turn_log = {'turn': turn, 'drew': None, 'landPlayed': None, 'manaPool': {}, 'manaSources': [], 'cast': None}
 
-        # Draw a card on turns 2+
-        if turn > 1 and draw_pile:
+        # Draw a card every turn (Commander rules — all players draw T1)
+        if draw_pile:
             drawn = draw_pile.pop(0)
             hand.append(drawn)
             turn_log['drew'] = drawn['name']
 
-        # Play a land from hand if we have one
+        # Play a land — prefer one that covers our spell color requirements
         land_candidates = [c for c in hand if c['isLand']]
         if land_candidates:
-            # Prefer a land that produces colors we need for cards in hand
             desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
             for c in [x for x in hand if not x['isLand']]:
                 for color in ['W', 'U', 'B', 'R', 'G', 'C']:
@@ -280,7 +270,7 @@ def evaluate_opening(deck, turns_seen=3):
             lands_in_play.append(land_to_play)
             turn_log['landPlayed'] = land_to_play['name']
 
-        # Build mana pool from all sources on battlefield
+        # Build mana pool from battlefield sources
         desired_for_pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
         for c in [x for x in hand if not x['isLand']]:
             for color in ['W', 'U', 'B', 'R', 'G', 'C']:
@@ -290,19 +280,16 @@ def evaluate_opening(deck, turns_seen=3):
         turn_log['manaSources'] = sources
         total_mana = sum(pool.values())
 
-        # Check curve: we should have at least `turn` mana available
         if total_mana < turn:
             curve_ok = False
 
-        # Find best castable spell from hand
+        # Cast best spell we can afford
         castable = [
             c for c in hand
             if not c['isLand']
             and c['manaValue'] <= total_mana
             and can_pay_cost(c['costSymbols'], pool)
         ]
-
-        # Sort: prefer mana permanents, then by mana value descending (play the most expensive thing we can)
         castable.sort(key=lambda c: (2 if c['isManaPermanent'] else 0) + c['manaValue'], reverse=True)
 
         if castable:
@@ -319,9 +306,8 @@ def evaluate_opening(deck, turns_seen=3):
 
         turns.append(turn_log)
 
-    playable = curve_ok and has_play
     return {
-        'playable': playable,
+        'playable': curve_ok and has_play,
         'curveOk': curve_ok,
         'hasPlayByTurn3': has_play,
         'openingHand': [c['name'] for c in opening_hand],
