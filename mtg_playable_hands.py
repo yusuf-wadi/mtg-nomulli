@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '8'  # bumped: cmc now stored directly from Scryfall top-level field
+CACHE_VERSION = '9'  # bumped: force eviction of any stale index
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -75,9 +75,6 @@ def _card_mana_cost(card: dict) -> str:
 
 
 def _card_cmc(card: dict) -> float:
-    """Always read the top-level cmc field from Scryfall.
-    For double-faced cards the top-level cmc is the front face's CMC.
-    Never fall back to 0 silently — return 0 only if truly absent."""
     cmc = card.get('cmc')
     if cmc is not None:
         return float(cmc)
@@ -94,6 +91,10 @@ def ensure_bulk_data():
     if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
+    # Delete stale cache files before rebuilding
+    for p in (BULK_PATH, INDEX_PATH, VERSION_PATH):
+        if p.exists():
+            p.unlink()
     manifest = fetch_json(BULK_API)
     bulk = next((x for x in manifest.get('data', []) if x.get('type') == 'oracle_cards'), None)
     if not bulk:
@@ -114,7 +115,7 @@ def ensure_bulk_data():
                 if c not in produced:
                     produced.append(c)
         mana_cost = _card_mana_cost(card)
-        cmc = _card_cmc(card)  # authoritative CMC from Scryfall
+        cmc = _card_cmc(card)
         compact = {
             'name': card.get('name', ''),
             'mana_cost': mana_cost,
@@ -136,8 +137,12 @@ def ensure_bulk_data():
 
 def parse_mana_cost_symbols(mana_cost: str) -> dict:
     """Parse a Scryfall mana cost string like {2}{U} into symbol counts.
-    Returns: {'W','U','B','R','G','C': int pips, 'generic': int generic mana}
-    Example: {2}{U} -> generic=2, U=1, total CMC=3
+    Returns: {'W','U','B','R','G','C': int color pips, 'generic': int generic mana}
+    Examples:
+      {2}{U}   -> generic=2, U=1        (Rhystic Study, CMC 3)
+      {W}      -> W=1                    (Path to Exile, CMC 1)
+      {2}{W}   -> generic=2, W=1        (Soulherder, CMC 3)
+      {1}{U}   -> generic=1, U=1        (Negate, CMC 2)
     """
     counts = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0, 'generic': 0}
     for sym in re.findall(r'\{([^}]+)\}', mana_cost or ''):
@@ -146,29 +151,27 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
             counts['generic'] += int(s)
         elif s in ('W', 'U', 'B', 'R', 'G', 'C'):
             counts[s] += 1
-        elif s == 'X' or s == 'Y' or s == 'Z':
-            pass  # variable costs ignored for castability checks
+        elif s in ('X', 'Y', 'Z'):
+            pass  # variable costs ignored
         elif '/' in s:
-            # Hybrid or Phyrexian pip: {W/U}, {2/W}, {W/P}
             parts = s.split('/')
             color_parts = [p for p in parts if p in ('W', 'U', 'B', 'R', 'G', 'C')]
             numeric_parts = [int(p) for p in parts if p.isdigit()]
             if color_parts:
-                # Treat as 1 generic (any of the options satisfies it)
-                counts['generic'] += 1
+                counts['generic'] += 1  # hybrid: treat as 1 generic
             elif numeric_parts:
                 counts['generic'] += numeric_parts[0]
             else:
                 counts['generic'] += 1
-        elif s == 'S':  # snow mana
+        elif s == 'S':
             counts['generic'] += 1
         else:
             counts['generic'] += 1
     return counts
 
 
-def cost_total(cost: dict) -> int:
-    """Total mana needed to cast a spell (sum of all pips + generic)."""
+def cmc_from_symbols(cost: dict) -> int:
+    """Compute CMC from parsed costSymbols dict."""
     return sum(v for k, v in cost.items() if k != 'generic') + cost.get('generic', 0)
 
 
@@ -181,7 +184,6 @@ def summarize_face_data(card):
             if c not in produced:
                 produced.append(c)
     mana_cost = card.get('mana_cost') or (face or {}).get('mana_cost', '') or ''
-    # Always use the top-level authoritative cmc
     cmc = card.get('cmc')
     if cmc is None and face:
         cmc = face.get('cmc')
@@ -227,11 +229,16 @@ def classify_card(entry, card):
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
+    # Use Scryfall CMC as authoritative; cross-check with parsed symbols
+    scryfall_cmc = face['cmc']
+    parsed_cmc = cmc_from_symbols(cost_symbols)
+    # Trust Scryfall; use parsed as fallback if Scryfall gave 0 for a non-land
+    mana_value = scryfall_cmc if scryfall_cmc > 0 or is_land else float(parsed_cmc)
     return {
         **entry,
         'name': card.get('name', entry['inputName']),
         'mana_cost': face['mana_cost'],
-        'manaValue': face['cmc'],  # authoritative Scryfall CMC
+        'manaValue': mana_value,
         'type_line': face['type_line'],
         'colors': face['colors'],
         'color_identity': face['color_identity'],
@@ -259,8 +266,9 @@ def parse_decklist(text: str):
 
 
 def can_pay_cost(cost: dict, pool: dict) -> bool:
-    """Check if the mana pool can pay the cost.
-    First satisfy all specific color pips, then check remaining mana >= generic.
+    """Check if the mana pool satisfies the cost.
+    Step 1: verify each color pip can be met exactly.
+    Step 2: verify enough total mana remains for generic.
     """
     remaining = dict(pool)
     for c in ('W', 'U', 'B', 'R', 'G', 'C'):
@@ -274,13 +282,10 @@ def can_pay_cost(cost: dict, pool: dict) -> bool:
 
 
 def spend_mana(cost: dict, pool: dict) -> dict:
-    """Deduct the cost from the pool. Colored pips come off their color;
-    generic mana is taken from colorless first, then least-needed colors."""
     remaining = dict(pool)
     for c in ('W', 'U', 'B', 'R', 'G', 'C'):
         remaining[c] = remaining.get(c, 0) - cost.get(c, 0)
     generic = cost.get('generic', 0)
-    # Spend generic from colorless first, then surplus colored (least desired order)
     for c in ('C', 'G', 'R', 'B', 'U', 'W'):
         if generic <= 0:
             break
@@ -290,33 +295,26 @@ def spend_mana(cost: dict, pool: dict) -> dict:
     return remaining
 
 
-def build_mana_pool(lands_on_battlefield: list, mana_perms_on_battlefield: list, desired: dict) -> tuple:
-    """Build a mana pool from available untapped sources.
-
-    `desired` should map each color (W/U/B/R/G/C) to the total pips needed
-    across all spells in hand PLUS the generic mana needed distributed to
-    any color.  We use a two-pass approach:
-      Pass 1 — assign each source to a color pip it can directly satisfy.
-      Pass 2 — assign remaining sources to any color (extra generic coverage).
-    This means a land that produces {W} or {U} will correctly contribute
-    to a {2}{U} spell: pass 1 assigns it to U if U is needed, and the
-    second unassigned source covers generic.
+def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
+    """Assign each mana source to the color it most usefully produces.
+    `desired` maps color -> total pips needed from hand (including generic as 'C').
+    Sources satisfy specific color pips first, then cover generic with remainder.
     """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
-    sources = lands_on_battlefield + mana_perms_on_battlefield
-
     remaining_desired = dict(desired)
 
-    for source in sources:
+    for source in (lands + mana_perms):
         opts = source.get('produced_mana') or ['C']
-        # Try to satisfy a specific color pip first
-        chosen = next((c for c in opts if remaining_desired.get(c, 0) > 0), None)
-        if chosen:
-            remaining_desired[chosen] = max(0, remaining_desired[chosen] - 1)
-        else:
-            # No specific pip needed — just pick the first available color
-            chosen = opts[0]
+        # First try to satisfy a specific color pip
+        chosen = next((c for c in opts if c != 'C' and remaining_desired.get(c, 0) > 0), None)
+        if chosen is None:
+            # Then try colorless/generic coverage
+            chosen = next((c for c in opts if remaining_desired.get(c, 0) > 0), None)
+        if chosen is None:
+            chosen = opts[0]  # fallback: first option
+        if remaining_desired.get(chosen, 0) > 0:
+            remaining_desired[chosen] = remaining_desired[chosen] - 1
         pool[chosen] = pool.get(chosen, 0) + 1
         sources_used.append(source['name'])
 
@@ -324,10 +322,9 @@ def build_mana_pool(lands_on_battlefield: list, mana_perms_on_battlefield: list,
 
 
 def desired_from_hand(hand: list) -> dict:
-    """Sum up color requirements across all spells in hand.
-    Generic mana is distributed: each point of generic adds 1 to 'C' bucket
-    (colorless generic coverage) so that build_mana_pool allocates enough
-    total mana even for {2}{U}-style costs.
+    """Aggregate mana requirements across all non-land cards in hand.
+    Color pips go to their color bucket; generic goes to 'C' so the pool
+    builder allocates enough total sources for spells like {2}{U}.
     """
     desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     for card in hand:
@@ -336,31 +333,26 @@ def desired_from_hand(hand: list) -> dict:
         cost = card.get('costSymbols', {})
         for color in ('W', 'U', 'B', 'R', 'G', 'C'):
             desired[color] += cost.get(color, 0)
-        # Generic mana: add to 'C' so we request enough total mana sources
         desired['C'] += cost.get('generic', 0)
     return desired
 
 
 def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
     """
-    Simulate turns 1-3 with a correct MTG state machine.
-
-    Rules modelled:
-    - Tapped lands enter tapped — they produce 0 mana the turn they are played.
-      They untap at the start of the next turn (tapped_staging -> lands_in_play).
-    - Mana permanents (Sol Ring, Signets, mana dorks) enter untapped and
-      can tap for mana the same turn they are cast.
-    - Color-pip requirements are checked precisely: {2}{U} requires exactly
-      1 blue pip plus 2 generic, not 3 of any color.
-    - Generic mana is paid from leftover colored mana after pips are satisfied.
-    - The simulator prefers casting mana ramp on early turns to compound.
+    MTG turn simulator with correct mana rules:
+    - Tapped lands produce 0 mana the turn played; untap at start of next turn.
+    - Mana permanents tap for mana the same turn they are cast.
+    - Castable check: BOTH CMC guard (manaValue <= total mana available)
+      AND full color-pip + generic check via can_pay_cost.
+      The CMC guard is a hard upper bound that prevents any slip-through
+      when costSymbols are inconsistent with manaValue.
     """
     opening_hand = deck[:7]
     draw_pile = deck[7:]
 
     hand = list(opening_hand)
-    lands_in_play = []        # untapped and available this turn
-    tapped_staging = []       # played this turn as tapped; untap next turn
+    lands_in_play = []
+    tapped_staging = []
     mana_perms_in_play = []
     nonmana_perms_in_play = []
 
@@ -379,17 +371,14 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             'cast': None
         }
 
-        # Untap step: previously tapped lands are now available
         lands_in_play.extend(tapped_staging)
         tapped_staging = []
 
-        # Draw (Commander: draw every turn including turn 1)
         if draw_pile:
             drawn = draw_pile.pop(0)
             hand.append(drawn)
             turn_log['drew'] = drawn['name']
 
-        # Play a land — prefer untapped lands for early turns
         land_candidates = [c for c in hand if c['isLand']]
         if land_candidates:
             desired = desired_from_hand(hand)
@@ -397,7 +386,6 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             def land_score(land):
                 opts = land.get('produced_mana') or ['C']
                 color_value = sum(desired.get(c, 0) for c in opts)
-                # Heavily penalise tapped lands so we play untapped first
                 tapped_penalty = -1000 if land.get('entersTapped') else 0
                 return color_value + tapped_penalty
 
@@ -411,7 +399,6 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             turn_log['landPlayed'] = land_to_play['name']
             turn_log['landTapped'] = enters_tapped
 
-        # Build mana pool from currently untapped lands + mana perms in play
         desired_pool = desired_from_hand(hand)
         pool, sources = build_mana_pool(lands_in_play, mana_perms_in_play, desired_pool)
         turn_log['manaPool'] = {k: v for k, v in pool.items() if v > 0}
@@ -421,13 +408,13 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         if total_mana < turn:
             curve_ok = False
 
-        # Find castable spells: must satisfy both color pips AND generic mana
+        # Castable: HARD CMC cap first, then full color+generic check
         castable = [
             c for c in hand
             if not c['isLand']
-            and can_pay_cost(c['costSymbols'], pool)
+            and c['manaValue'] <= total_mana          # hard upper bound
+            and can_pay_cost(c['costSymbols'], pool)  # exact pip + generic check
         ]
-        # Prioritise: mana ramp first, then by MV descending (biggest bang for available mana)
         castable.sort(
             key=lambda c: (2 if c['isManaPermanent'] else 0) + c['manaValue'],
             reverse=True
@@ -436,11 +423,12 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         if castable:
             has_play = True
             chosen = castable[0]
-            mv = int(chosen['manaValue']) if chosen['manaValue'] == int(chosen['manaValue']) else chosen['manaValue']
+            mv = chosen['manaValue']
+            mv_display = int(mv) if mv == int(mv) else mv
             turn_log['cast'] = {
                 'name': chosen['name'],
                 'manaCost': chosen['mana_cost'],
-                'mv': mv
+                'mv': mv_display
             }
             hand.remove(chosen)
             pool = spend_mana(chosen['costSymbols'], pool)
