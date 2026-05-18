@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '14'
+CACHE_VERSION = '15'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -178,7 +178,6 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
         elif s in ('W', 'U', 'B', 'R', 'G', 'C'):
             counts[s] += 1
         elif s in ('X', 'Y', 'Z'):
-            # X costs have a minimum of 1 — never let a card appear free
             counts['generic'] += 1
         elif '/' in s:
             parts = s.split('/')
@@ -186,13 +185,10 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
             numeric_parts = [int(p) for p in parts if p.isdigit()]
             phyrexian = 'P' in parts
             if phyrexian:
-                # {W/P}: player always pays 2 life — costs 0 mana for sim purposes
-                pass
+                pass  # pay 2 life = 0 mana
             elif numeric_parts and color_parts:
-                # {2/W} style: numeric alt is the mana cost
                 counts['generic'] += numeric_parts[0]
             elif color_parts:
-                # {W/U} color hybrid: either color works, treat as 1 generic
                 counts['generic'] += 1
             else:
                 counts['generic'] += 1
@@ -204,13 +200,21 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
 
 
 def effective_cmc(cost_symbols: dict) -> int:
-    """Total mana required: sum of all pips + generic."""
     return sum(v for k, v in cost_symbols.items() if k != 'generic') + cost_symbols.get('generic', 0)
 
 
-def summarize_face_data(card):
+def summarize_face_data(card, raw_card=None):
+    """
+    Extract mana cost, type, and produced mana from a card or its first face.
+    raw_card: the original unprocessed card dict, used as fallback for type_line.
+    """
     face = (card.get('card_faces') or [None])[0]
-    type_line = card.get('type_line') or (face or {}).get('type_line', '')
+    # Defensive: prefer card-level type_line, fall back to face, then raw_card
+    type_line = (card.get('type_line') or '').strip()
+    if not type_line and face:
+        type_line = (face.get('type_line') or '').strip()
+    if not type_line and raw_card:
+        type_line = (raw_card.get('type_line') or '').strip()
     is_land = 'land' in type_line.lower()
     if is_land:
         produced = _produced_mana_for_land(card, type_line)
@@ -256,13 +260,16 @@ def classify_card(entry, card):
             'entersTapped': False,
             'costSymbols': parse_mana_cost_symbols(''),
         }
-    face = summarize_face_data(card)
-    type_line = face['type_line'].lower()
-    is_land = 'land' in type_line
-    is_permanent = any(x in type_line for x in ['artifact', 'creature', 'enchantment', 'planeswalker', 'battle', 'land'])
+    face = summarize_face_data(card, raw_card=card)
+    type_line = face['type_line']
+    type_lower = type_line.lower()
+    is_land = 'land' in type_lower
+    is_permanent = any(x in type_lower for x in ['artifact', 'creature', 'enchantment', 'planeswalker', 'battle', 'land'])
     produced = [c for c in face['produced_mana'] if c in ['W', 'U', 'B', 'R', 'G', 'C']]
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
+    if not produced and is_land:
+        produced = ['C']  # every land produces at least colorless
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
     scryfall_cmc = face['cmc']
     eff_cmc = effective_cmc(cost_symbols)
@@ -272,7 +279,7 @@ def classify_card(entry, card):
         'name': card.get('name', entry['inputName']),
         'mana_cost': face['mana_cost'],
         'manaValue': mana_value,
-        'type_line': face['type_line'],
+        'type_line': type_line,
         'colors': face['colors'],
         'color_identity': face['color_identity'],
         'produced_mana': list(dict.fromkeys(produced)),
@@ -299,11 +306,6 @@ def parse_decklist(text: str):
 
 
 def can_pay_cost(cost: dict, pool: dict) -> bool:
-    """
-    Check if pool can pay cost.
-    Colored pips must be paid with matching color.
-    Generic can be paid with any remaining mana.
-    """
     remaining = dict(pool)
     for c in ('W', 'U', 'B', 'R', 'G', 'C'):
         need = cost.get(c, 0)
@@ -365,6 +367,30 @@ def desired_from_hand(hand: list) -> dict:
     return desired
 
 
+def is_spell(card: dict) -> bool:
+    """
+    True only for cards that can actually be cast as a spell.
+    Excludes: lands, and any zero-cost card with no mana cost string
+    (which catches un-classified lands that slipped through).
+    """
+    if card.get('isLand'):
+        return False
+    # Belt-and-suspenders: if mana_cost is empty AND manaValue==0, it's almost
+    # certainly a land or token that wasn't classified correctly — exclude it.
+    if not card.get('mana_cost') and card.get('manaValue', 0) == 0:
+        # Exceptions: true 0-cost spells like Ancestral Vision (suspend),
+        # Pact of Negation, etc. have explicit mana_cost='' but are special.
+        # We identify true free spells by checking they have a real type_line
+        # that does NOT contain 'land'.
+        type_lower = (card.get('type_line') or '').lower()
+        if 'land' in type_lower:
+            return False
+        # If type_line is blank too, exclude — can't determine what this is
+        if not type_lower:
+            return False
+    return True
+
+
 def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
     opening_hand = deck[:7]
     draw_pile = deck[7:]
@@ -419,11 +445,10 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         total_mana = sum(pool.values())
         if total_mana < turn:
             curve_ok = False
-        # Castability: rely entirely on can_pay_cost (full symbol check).
-        # No manaValue guard — cost_symbols is the authoritative requirement.
+        # Use is_spell() which guards against misclassified lands appearing here
         castable = [
             c for c in hand
-            if not c['isLand']
+            if is_spell(c)
             and can_pay_cost(c['costSymbols'], pool)
         ]
         castable.sort(
