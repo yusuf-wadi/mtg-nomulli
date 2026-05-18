@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '6'  # bumped: mana_cost/cmc now fall back to card_faces[0]
+CACHE_VERSION = '7'  # bumped: entersTapped detection added
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -25,6 +25,14 @@ SUBTYPE_MANA = {
     'mountain': 'R',
     'forest':   'G',
 }
+
+# Matches oracle text patterns that indicate a land enters the battlefield tapped.
+# Covers: "enters tapped", "enters the battlefield tapped",
+# "this land enters tapped", "CARDNAME enters tapped", etc.
+ENTERS_TAPPED_RE = re.compile(
+    r'enters(?: the battlefield)? tapped',
+    re.IGNORECASE
+)
 
 
 def normalize_name(raw: str) -> str:
@@ -48,6 +56,18 @@ def infer_produced_from_type(type_line: str):
     return produced
 
 
+def _enters_tapped(card: dict) -> bool:
+    """
+    Return True if this card always enters the battlefield tapped.
+    Checks top-level oracle_text and all card_faces oracle texts.
+    Does NOT flag conditional tap lands (e.g. Cavern of Souls, Sunken Ruins).
+    """
+    texts = [card.get('oracle_text') or '']
+    for face in card.get('card_faces') or []:
+        texts.append(face.get('oracle_text') or '')
+    return any(ENTERS_TAPPED_RE.search(t) for t in texts)
+
+
 def cache_is_valid() -> bool:
     if not (BULK_PATH.exists() and INDEX_PATH.exists() and VERSION_PATH.exists()):
         return False
@@ -55,11 +75,6 @@ def cache_is_valid() -> bool:
 
 
 def _card_mana_cost(card: dict) -> str:
-    """
-    Return the real mana cost of a card.
-    Scryfall leaves top-level mana_cost empty for DFCs/split cards
-    and stores the cost only on card_faces[0]. Always fall back to the first face.
-    """
     top = card.get('mana_cost') or ''
     if top:
         return top
@@ -68,11 +83,6 @@ def _card_mana_cost(card: dict) -> str:
 
 
 def _card_cmc(card: dict) -> float:
-    """
-    Return the real CMC. For split cards Scryfall stores the combined CMC at
-    top level (correct), but for DFCs with an empty top-level mana_cost the
-    top-level cmc is 0 and we must read it from card_faces[0].
-    """
     top_cmc = card.get('cmc') or 0
     if top_cmc:
         return top_cmc
@@ -104,7 +114,6 @@ def ensure_bulk_data():
             for c in infer_produced_from_type(type_line):
                 if c not in produced:
                     produced.append(c)
-        # Use helpers so DFCs/split cards get correct mana_cost and cmc
         compact = {
             'name': card.get('name', ''),
             'mana_cost': _card_mana_cost(card),
@@ -113,7 +122,8 @@ def ensure_bulk_data():
             'colors': card.get('colors') or [],
             'color_identity': card.get('color_identity') or [],
             'produced_mana': produced,
-            'card_faces': card.get('card_faces') or []
+            'card_faces': card.get('card_faces') or [],
+            'entersTapped': _enters_tapped(card),
         }
         for n in names:
             idx.setdefault(n, compact)
@@ -150,8 +160,6 @@ def summarize_face_data(card):
         for c in infer_produced_from_type(type_line):
             if c not in produced:
                 produced.append(c)
-    # Use helpers so the compact dict (which already stored correct values) or
-    # a raw Scryfall card both resolve correctly.
     mana_cost = card.get('mana_cost') or (face or {}).get('mana_cost', '') or ''
     cmc = card.get('cmc') or (face or {}).get('cmc', 0) or 0
     return {
@@ -160,7 +168,8 @@ def summarize_face_data(card):
         'type_line': type_line,
         'colors': card.get('colors') or (face or {}).get('colors', []) or [],
         'color_identity': card.get('color_identity') or [],
-        'produced_mana': produced
+        'produced_mana': produced,
+        'entersTapped': card.get('entersTapped', False),
     }
 
 
@@ -183,6 +192,7 @@ def classify_card(entry, card):
             'isLand': True,
             'isPermanent': True,
             'isManaPermanent': False,
+            'entersTapped': False,  # basics always enter untapped
             'costSymbols': parse_mana_cost_symbols(''),
         }
     face = summarize_face_data(card)
@@ -204,6 +214,7 @@ def classify_card(entry, card):
         'isLand': is_land,
         'isPermanent': is_permanent,
         'isManaPermanent': is_permanent and (not is_land) and len(produced) > 0,
+        'entersTapped': face['entersTapped'],
         'costSymbols': parse_mana_cost_symbols(face['mana_cost'])
     }
 
@@ -261,15 +272,16 @@ def build_mana_pool(lands_on_battlefield, mana_perms_on_battlefield, desired):
 def evaluate_opening(deck, turns_seen=3):
     """
     Simulate turns 1-3 with a proper state machine.
-    In Commander, every player draws on every turn (including turn 1).
-    opening_hand = 7 cards dealt before the game starts.
-    Each turn: draw 1, play a land, build mana pool, cast best spell.
+    - Tapped lands go into tapped_staging on the turn played; they untap
+      and move to lands_in_play at the START of the next turn.
+    - Mana perms (Sol Ring etc.) enter untapped and tap immediately for mana.
     """
     opening_hand = deck[:7]
     draw_pile = deck[7:]
 
     hand = list(opening_hand)
-    lands_in_play = []
+    lands_in_play = []       # untapped, contribute mana this turn
+    tapped_staging = []      # played this turn or still tapped; untap next turn
     mana_perms_in_play = []
     nonmana_perms_in_play = []
 
@@ -278,30 +290,53 @@ def evaluate_opening(deck, turns_seen=3):
     turns = []
 
     for turn in range(1, 4):
-        turn_log = {'turn': turn, 'drew': None, 'landPlayed': None, 'manaPool': {}, 'manaSources': [], 'cast': None}
+        turn_log = {
+            'turn': turn,
+            'drew': None,
+            'landPlayed': None,
+            'landTapped': False,
+            'manaPool': {},
+            'manaSources': [],
+            'cast': None
+        }
 
-        # Draw a card every turn (Commander rules - all players draw T1)
+        # Untap step: tapped_staging lands become available
+        lands_in_play.extend(tapped_staging)
+        tapped_staging = []
+
+        # Draw a card every turn (Commander rules)
         if draw_pile:
             drawn = draw_pile.pop(0)
             hand.append(drawn)
             turn_log['drew'] = drawn['name']
 
-        # Play a land - prefer one that covers our spell color requirements
+        # Play a land.
+        # Prefer untapped lands — tapped lands are a last resort on early turns.
         land_candidates = [c for c in hand if c['isLand']]
         if land_candidates:
             desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
             for c in [x for x in hand if not x['isLand']]:
                 for color in ['W', 'U', 'B', 'R', 'G', 'C']:
                     desired[color] += c['costSymbols'].get(color, 0)
+
             def land_score(land):
                 opts = land.get('produced_mana') or ['C']
-                return sum(desired.get(c, 0) for c in opts)
+                color_value = sum(desired.get(c, 0) for c in opts)
+                # Heavy penalty for tapped lands so we prefer untapped when available
+                tapped_penalty = -1000 if land.get('entersTapped') else 0
+                return color_value + tapped_penalty
+
             land_to_play = max(land_candidates, key=land_score)
             hand.remove(land_to_play)
-            lands_in_play.append(land_to_play)
+            enters_tapped = land_to_play.get('entersTapped', False)
+            if enters_tapped:
+                tapped_staging.append(land_to_play)
+            else:
+                lands_in_play.append(land_to_play)
             turn_log['landPlayed'] = land_to_play['name']
+            turn_log['landTapped'] = enters_tapped
 
-        # Build mana pool from battlefield sources
+        # Build mana pool — only from untapped lands + mana perms already in play
         desired_for_pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
         for c in [x for x in hand if not x['isLand']]:
             for color in ['W', 'U', 'B', 'R', 'G', 'C']:
@@ -314,7 +349,7 @@ def evaluate_opening(deck, turns_seen=3):
         if total_mana < turn:
             curve_ok = False
 
-        # Cast best spell we can afford
+        # Cast best affordable spell
         castable = [
             c for c in hand
             if not c['isLand']
@@ -359,7 +394,8 @@ def hydrate_deck(deck_text: str):
                 'colors': [],
                 'color_identity': BASIC_LANDS[item['normalized']],
                 'produced_mana': BASIC_LANDS[item['normalized']],
-                'card_faces': []
+                'card_faces': [],
+                'entersTapped': False,
             }
             resolved.append(classify_card(item, stub))
             continue
@@ -397,11 +433,13 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
     nonlands = [c for c in hydrated if not c['isLand']]
     avg_mv = (sum(c['manaValue'] for c in nonlands) / len(nonlands)) if nonlands else 0
     colors = ''.join(sorted({x for c in hydrated for x in c.get('color_identity', [])})) or 'C'
+    tapped_land_count = sum(1 for c in hydrated if c.get('isLand') and c.get('entersTapped'))
     return {
         'deckSize': len(hydrated),
         'missing': missing,
         'colorIdentity': colors,
         'lands': lands,
+        'tappedLands': tapped_land_count,
         'manaPermanents': mana_perms,
         'averageNonlandManaValue': round(avg_mv, 4),
         'simulations': simulations,
