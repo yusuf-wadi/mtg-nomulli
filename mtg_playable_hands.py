@@ -7,7 +7,23 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '15'
+CACHE_VERSION = '17'
+
+# Only layouts that can legally appear in a Commander (or any) deck.
+# Everything else (tokens, emblems, art series, vanguards, planes, schemes,
+# reversible reprints, double-faced tokens) is excluded at index-build time
+# so the index is clean and no downstream guards are needed.
+COMMANDER_LEGAL_LAYOUTS = {
+    'normal', 'transform', 'modal_dfc', 'adventure', 'split', 'flip',
+    'meld', 'leveler', 'saga', 'prototype', 'mutate', 'class', 'case',
+    'host', 'augment',
+}
+
+# type_line substrings that mark a card as a non-deckable object even if
+# the layout field somehow passed the allowlist (belt-and-suspenders).
+ILLEGAL_TYPE_SUBSTRINGS = {
+    'token', 'emblem', 'plane ', 'planes', 'scheme', 'vanguard',
+}
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -104,12 +120,38 @@ def _card_cmc(card: dict) -> float:
     return 0.0
 
 
+def _card_type_line(card: dict) -> str:
+    tl = (card.get('type_line') or '').strip()
+    if tl:
+        return tl
+    faces = card.get('card_faces') or []
+    if faces:
+        return (faces[0].get('type_line') or '').strip()
+    return ''
+
+
 def _produced_mana_for_land(card: dict, type_line: str) -> list:
     raw = list(card.get('produced_mana') or [])
     if raw:
         return raw
     inferred = infer_produced_from_type(type_line)
     return inferred if inferred else ['C']
+
+
+def _is_commander_legal(card: dict) -> bool:
+    """Return True only for cards that can appear in a Commander deck."""
+    layout = card.get('layout') or ''
+    if layout not in COMMANDER_LEGAL_LAYOUTS:
+        return False
+    type_line = _card_type_line(card).lower()
+    # Must have a non-empty type line
+    if not type_line:
+        return False
+    # Must not be a game object that lives outside a deck
+    for bad in ILLEGAL_TYPE_SUBSTRINGS:
+        if bad in type_line:
+            return False
+    return True
 
 
 def ensure_bulk_data():
@@ -129,11 +171,14 @@ def ensure_bulk_data():
         json.dump(data, f)
     idx = {}
     for card in data:
+        # Purge: only index cards that can appear in a Commander deck
+        if not _is_commander_legal(card):
+            continue
         names = {normalize_name(card.get('name', ''))}
         for face in card.get('card_faces', []) or []:
             if face.get('name'):
                 names.add(normalize_name(face['name']))
-        type_line = card.get('type_line', '')
+        type_line = _card_type_line(card)
         is_land = 'land' in type_line.lower()
         produced = _produced_mana_for_land(card, type_line) if is_land else list(card.get('produced_mana') or [])
         mana_cost = _card_mana_cost(card)
@@ -209,7 +254,6 @@ def summarize_face_data(card, raw_card=None):
     raw_card: the original unprocessed card dict, used as fallback for type_line.
     """
     face = (card.get('card_faces') or [None])[0]
-    # Defensive: prefer card-level type_line, fall back to face, then raw_card
     type_line = (card.get('type_line') or '').strip()
     if not type_line and face:
         type_line = (face.get('type_line') or '').strip()
@@ -375,17 +419,10 @@ def is_spell(card: dict) -> bool:
     """
     if card.get('isLand'):
         return False
-    # Belt-and-suspenders: if mana_cost is empty AND manaValue==0, it's almost
-    # certainly a land or token that wasn't classified correctly — exclude it.
     if not card.get('mana_cost') and card.get('manaValue', 0) == 0:
-        # Exceptions: true 0-cost spells like Ancestral Vision (suspend),
-        # Pact of Negation, etc. have explicit mana_cost='' but are special.
-        # We identify true free spells by checking they have a real type_line
-        # that does NOT contain 'land'.
         type_lower = (card.get('type_line') or '').lower()
         if 'land' in type_lower:
             return False
-        # If type_line is blank too, exclude — can't determine what this is
         if not type_lower:
             return False
     return True
@@ -445,7 +482,6 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         total_mana = sum(pool.values())
         if total_mana < turn:
             curve_ok = False
-        # Use is_spell() which guards against misclassified lands appearing here
         castable = [
             c for c in hand
             if is_spell(c)
