@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '5'
+CACHE_VERSION = '6'  # bumped: mana_cost/cmc now fall back to card_faces[0]
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -54,6 +54,32 @@ def cache_is_valid() -> bool:
     return VERSION_PATH.read_text().strip() == CACHE_VERSION
 
 
+def _card_mana_cost(card: dict) -> str:
+    """
+    Return the real mana cost of a card.
+    Scryfall leaves top-level mana_cost empty for DFCs/split cards
+    and stores the cost only on card_faces[0]. Always fall back to the first face.
+    """
+    top = card.get('mana_cost') or ''
+    if top:
+        return top
+    faces = card.get('card_faces') or []
+    return (faces[0].get('mana_cost') or '') if faces else ''
+
+
+def _card_cmc(card: dict) -> float:
+    """
+    Return the real CMC. For split cards Scryfall stores the combined CMC at
+    top level (correct), but for DFCs with an empty top-level mana_cost the
+    top-level cmc is 0 and we must read it from card_faces[0].
+    """
+    top_cmc = card.get('cmc') or 0
+    if top_cmc:
+        return top_cmc
+    faces = card.get('card_faces') or []
+    return (faces[0].get('cmc') or 0) if faces else 0
+
+
 def ensure_bulk_data():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if cache_is_valid():
@@ -78,10 +104,11 @@ def ensure_bulk_data():
             for c in infer_produced_from_type(type_line):
                 if c not in produced:
                     produced.append(c)
+        # Use helpers so DFCs/split cards get correct mana_cost and cmc
         compact = {
             'name': card.get('name', ''),
-            'mana_cost': card.get('mana_cost', ''),
-            'cmc': card.get('cmc', 0),
+            'mana_cost': _card_mana_cost(card),
+            'cmc': _card_cmc(card),
             'type_line': type_line,
             'colors': card.get('colors') or [],
             'color_identity': card.get('color_identity') or [],
@@ -123,9 +150,13 @@ def summarize_face_data(card):
         for c in infer_produced_from_type(type_line):
             if c not in produced:
                 produced.append(c)
+    # Use helpers so the compact dict (which already stored correct values) or
+    # a raw Scryfall card both resolve correctly.
+    mana_cost = card.get('mana_cost') or (face or {}).get('mana_cost', '') or ''
+    cmc = card.get('cmc') or (face or {}).get('cmc', 0) or 0
     return {
-        'mana_cost': card.get('mana_cost') or (face or {}).get('mana_cost', ''),
-        'cmc': card.get('cmc', (face or {}).get('cmc', 0)) or 0,
+        'mana_cost': mana_cost,
+        'cmc': cmc,
         'type_line': type_line,
         'colors': card.get('colors') or (face or {}).get('colors', []) or [],
         'color_identity': card.get('color_identity') or [],
@@ -235,7 +266,7 @@ def evaluate_opening(deck, turns_seen=3):
     Each turn: draw 1, play a land, build mana pool, cast best spell.
     """
     opening_hand = deck[:7]
-    draw_pile = deck[7:]  # cards drawn on T1, T2, T3 come from here
+    draw_pile = deck[7:]
 
     hand = list(opening_hand)
     lands_in_play = []
@@ -249,13 +280,13 @@ def evaluate_opening(deck, turns_seen=3):
     for turn in range(1, 4):
         turn_log = {'turn': turn, 'drew': None, 'landPlayed': None, 'manaPool': {}, 'manaSources': [], 'cast': None}
 
-        # Draw a card every turn (Commander rules — all players draw T1)
+        # Draw a card every turn (Commander rules - all players draw T1)
         if draw_pile:
             drawn = draw_pile.pop(0)
             hand.append(drawn)
             turn_log['drew'] = drawn['name']
 
-        # Play a land — prefer one that covers our spell color requirements
+        # Play a land - prefer one that covers our spell color requirements
         land_candidates = [c for c in hand if c['isLand']]
         if land_candidates:
             desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
