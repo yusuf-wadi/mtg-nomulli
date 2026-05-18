@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '10'
+CACHE_VERSION = '11'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -128,6 +128,26 @@ def _card_cmc(card: dict) -> float:
     return 0.0
 
 
+def _produced_mana_for_land(card: dict, type_line: str) -> list:
+    """
+    Build the full XOR list of mana options a land can produce.
+
+    For pain lands / filter lands / dual-purpose lands Scryfall's
+    produced_mana already lists every color. We preserve that list
+    exactly so the frontend can show the XOR pill.
+
+    We only fall back to subtype inference when produced_mana is empty.
+    """
+    raw = list(card.get('produced_mana') or [])
+    # Keep C alongside any colors — pain lands produce {C} OR a color.
+    # Scryfall already includes 'C' in produced_mana for pain lands.
+    if raw:
+        return raw
+    # Fallback: infer from subtype (basic-type duals, e.g. Tropical Island)
+    inferred = infer_produced_from_type(type_line)
+    return inferred if inferred else ['C']
+
+
 def ensure_bulk_data():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if cache_is_valid():
@@ -150,11 +170,11 @@ def ensure_bulk_data():
             if face.get('name'):
                 names.add(normalize_name(face['name']))
         type_line = card.get('type_line', '')
-        produced = list(card.get('produced_mana') or [])
-        if 'land' in type_line.lower():
-            for c in infer_produced_from_type(type_line):
-                if c not in produced:
-                    produced.append(c)
+        is_land = 'land' in type_line.lower()
+        if is_land:
+            produced = _produced_mana_for_land(card, type_line)
+        else:
+            produced = list(card.get('produced_mana') or [])
         mana_cost = _card_mana_cost(card)
         cmc = _card_cmc(card)
         compact = {
@@ -210,11 +230,13 @@ def cmc_from_symbols(cost: dict) -> int:
 def summarize_face_data(card):
     face = (card.get('card_faces') or [None])[0]
     type_line = card.get('type_line') or (face or {}).get('type_line', '')
-    produced = list(card.get('produced_mana') or [])
-    if 'land' in type_line.lower():
-        for c in infer_produced_from_type(type_line):
-            if c not in produced:
-                produced.append(c)
+    is_land = 'land' in type_line.lower()
+    if is_land:
+        produced = _produced_mana_for_land(card, type_line)
+    else:
+        produced = list(card.get('produced_mana') or [])
+        if not produced:
+            produced = list((face or {}).get('produced_mana') or [])
     mana_cost = card.get('mana_cost') or (face or {}).get('mana_cost', '') or ''
     cmc = card.get('cmc')
     if cmc is None and face:
@@ -512,7 +534,7 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
             has_play_count += 1
     lands = sum(1 for c in hydrated if c['isLand'])
     mana_perms = sum(1 for c in hydrated if c['isManaPermanent'])
-    nonlands = [c for c in hydrated if not c['isLand']]
+    nonlands = [c for c in hydrated if not c['isLand']
     avg_mv = (sum(c['manaValue'] for c in nonlands) / len(nonlands)) if nonlands else 0
     colors = ''.join(sorted({x for c in hydrated for x in c.get('color_identity', [])})) or 'C'
     tapped_land_count = sum(1 for c in hydrated if c.get('isLand') and c.get('entersTapped'))
