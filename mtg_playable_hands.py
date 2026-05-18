@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '9'  # bumped: force eviction of any stale index
+CACHE_VERSION = '9'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -33,7 +33,34 @@ ENTERS_TAPPED_RE = re.compile(
 
 
 def normalize_name(raw: str) -> str:
-    return re.sub(r'\s+', ' ', re.sub(r'\([^)]*\)', '', re.sub(r'^[0-9]+x?\s+', '', raw.lower()))).strip()
+    """Normalize a card name for index lookup.
+    Strips leading quantity, parenthetical set codes, and extra whitespace.
+    Does NOT strip // here — MDFC splitting is handled in lookup_keys().
+    """
+    s = re.sub(r'^[0-9]+x?\s+', '', raw.lower())
+    s = re.sub(r'\([^)]*\)', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def lookup_keys(normalized: str) -> list:
+    """Return an ordered list of index keys to try for a normalized card name.
+    Handles three cases:
+      1. True MDFC: 'valki, god of lies // tibalt, cosmic impostor'
+         -> ['valki, god of lies', 'tibalt, cosmic impostor']
+         (try front face first, fall back to back face)
+      2. Repeated-name: 'soulherder // soulherder'
+         -> ['soulherder']  (deduplicated)
+      3. Plain name: 'counterspell' -> ['counterspell']
+    """
+    if '//' not in normalized:
+        return [normalized]
+    parts = [p.strip() for p in normalized.split('//')]
+    seen = []
+    for p in parts:
+        if p and p not in seen:
+            seen.append(p)
+    return seen
 
 
 def fetch_json(url: str):
@@ -91,7 +118,6 @@ def ensure_bulk_data():
     if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
-    # Delete stale cache files before rebuilding
     for p in (BULK_PATH, INDEX_PATH, VERSION_PATH):
         if p.exists():
             p.unlink()
@@ -104,6 +130,7 @@ def ensure_bulk_data():
         json.dump(data, f)
     idx = {}
     for card in data:
+        # Index by full card name and each individual face name
         names = {normalize_name(card.get('name', ''))}
         for face in card.get('card_faces', []) or []:
             if face.get('name'):
@@ -136,14 +163,6 @@ def ensure_bulk_data():
 
 
 def parse_mana_cost_symbols(mana_cost: str) -> dict:
-    """Parse a Scryfall mana cost string like {2}{U} into symbol counts.
-    Returns: {'W','U','B','R','G','C': int color pips, 'generic': int generic mana}
-    Examples:
-      {2}{U}   -> generic=2, U=1        (Rhystic Study, CMC 3)
-      {W}      -> W=1                    (Path to Exile, CMC 1)
-      {2}{W}   -> generic=2, W=1        (Soulherder, CMC 3)
-      {1}{U}   -> generic=1, U=1        (Negate, CMC 2)
-    """
     counts = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0, 'generic': 0}
     for sym in re.findall(r'\{([^}]+)\}', mana_cost or ''):
         s = sym.upper()
@@ -152,13 +171,13 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
         elif s in ('W', 'U', 'B', 'R', 'G', 'C'):
             counts[s] += 1
         elif s in ('X', 'Y', 'Z'):
-            pass  # variable costs ignored
+            pass
         elif '/' in s:
             parts = s.split('/')
             color_parts = [p for p in parts if p in ('W', 'U', 'B', 'R', 'G', 'C')]
             numeric_parts = [int(p) for p in parts if p.isdigit()]
             if color_parts:
-                counts['generic'] += 1  # hybrid: treat as 1 generic
+                counts['generic'] += 1
             elif numeric_parts:
                 counts['generic'] += numeric_parts[0]
             else:
@@ -171,7 +190,6 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
 
 
 def cmc_from_symbols(cost: dict) -> int:
-    """Compute CMC from parsed costSymbols dict."""
     return sum(v for k, v in cost.items() if k != 'generic') + cost.get('generic', 0)
 
 
@@ -229,10 +247,8 @@ def classify_card(entry, card):
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
-    # Use Scryfall CMC as authoritative; cross-check with parsed symbols
     scryfall_cmc = face['cmc']
     parsed_cmc = cmc_from_symbols(cost_symbols)
-    # Trust Scryfall; use parsed as fallback if Scryfall gave 0 for a non-land
     mana_value = scryfall_cmc if scryfall_cmc > 0 or is_land else float(parsed_cmc)
     return {
         **entry,
@@ -266,10 +282,6 @@ def parse_decklist(text: str):
 
 
 def can_pay_cost(cost: dict, pool: dict) -> bool:
-    """Check if the mana pool satisfies the cost.
-    Step 1: verify each color pip can be met exactly.
-    Step 2: verify enough total mana remains for generic.
-    """
     remaining = dict(pool)
     for c in ('W', 'U', 'B', 'R', 'G', 'C'):
         need = cost.get(c, 0)
@@ -296,36 +308,24 @@ def spend_mana(cost: dict, pool: dict) -> dict:
 
 
 def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
-    """Assign each mana source to the color it most usefully produces.
-    `desired` maps color -> total pips needed from hand (including generic as 'C').
-    Sources satisfy specific color pips first, then cover generic with remainder.
-    """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
     remaining_desired = dict(desired)
-
     for source in (lands + mana_perms):
         opts = source.get('produced_mana') or ['C']
-        # First try to satisfy a specific color pip
         chosen = next((c for c in opts if c != 'C' and remaining_desired.get(c, 0) > 0), None)
         if chosen is None:
-            # Then try colorless/generic coverage
             chosen = next((c for c in opts if remaining_desired.get(c, 0) > 0), None)
         if chosen is None:
-            chosen = opts[0]  # fallback: first option
+            chosen = opts[0]
         if remaining_desired.get(chosen, 0) > 0:
             remaining_desired[chosen] = remaining_desired[chosen] - 1
         pool[chosen] = pool.get(chosen, 0) + 1
         sources_used.append(source['name'])
-
     return pool, sources_used
 
 
 def desired_from_hand(hand: list) -> dict:
-    """Aggregate mana requirements across all non-land cards in hand.
-    Color pips go to their color bucket; generic goes to 'C' so the pool
-    builder allocates enough total sources for spells like {2}{U}.
-    """
     desired = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     for card in hand:
         if card.get('isLand'):
@@ -338,24 +338,13 @@ def desired_from_hand(hand: list) -> dict:
 
 
 def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
-    """
-    MTG turn simulator with correct mana rules:
-    - Tapped lands produce 0 mana the turn played; untap at start of next turn.
-    - Mana permanents tap for mana the same turn they are cast.
-    - Castable check: BOTH CMC guard (manaValue <= total mana available)
-      AND full color-pip + generic check via can_pay_cost.
-      The CMC guard is a hard upper bound that prevents any slip-through
-      when costSymbols are inconsistent with manaValue.
-    """
     opening_hand = deck[:7]
     draw_pile = deck[7:]
-
     hand = list(opening_hand)
     lands_in_play = []
     tapped_staging = []
     mana_perms_in_play = []
     nonmana_perms_in_play = []
-
     curve_ok = True
     has_play = False
     turns = []
@@ -370,25 +359,20 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             'manaSources': [],
             'cast': None
         }
-
         lands_in_play.extend(tapped_staging)
         tapped_staging = []
-
         if draw_pile:
             drawn = draw_pile.pop(0)
             hand.append(drawn)
             turn_log['drew'] = drawn['name']
-
         land_candidates = [c for c in hand if c['isLand']]
         if land_candidates:
             desired = desired_from_hand(hand)
-
             def land_score(land):
                 opts = land.get('produced_mana') or ['C']
                 color_value = sum(desired.get(c, 0) for c in opts)
                 tapped_penalty = -1000 if land.get('entersTapped') else 0
                 return color_value + tapped_penalty
-
             land_to_play = max(land_candidates, key=land_score)
             hand.remove(land_to_play)
             enters_tapped = land_to_play.get('entersTapped', False)
@@ -398,28 +382,23 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
                 lands_in_play.append(land_to_play)
             turn_log['landPlayed'] = land_to_play['name']
             turn_log['landTapped'] = enters_tapped
-
         desired_pool = desired_from_hand(hand)
         pool, sources = build_mana_pool(lands_in_play, mana_perms_in_play, desired_pool)
         turn_log['manaPool'] = {k: v for k, v in pool.items() if v > 0}
         turn_log['manaSources'] = sources
         total_mana = sum(pool.values())
-
         if total_mana < turn:
             curve_ok = False
-
-        # Castable: HARD CMC cap first, then full color+generic check
         castable = [
             c for c in hand
             if not c['isLand']
-            and c['manaValue'] <= total_mana          # hard upper bound
-            and can_pay_cost(c['costSymbols'], pool)  # exact pip + generic check
+            and c['manaValue'] <= total_mana
+            and can_pay_cost(c['costSymbols'], pool)
         ]
         castable.sort(
             key=lambda c: (2 if c['isManaPermanent'] else 0) + c['manaValue'],
             reverse=True
         )
-
         if castable:
             has_play = True
             chosen = castable[0]
@@ -437,7 +416,6 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
                     mana_perms_in_play.append(chosen)
                 else:
                     nonmana_perms_in_play.append(chosen)
-
         turns.append(turn_log)
 
     return {
@@ -454,20 +432,28 @@ def hydrate_deck(deck_text: str):
     parsed = parse_decklist(deck_text)
     resolved, missing = [], []
     for item in parsed:
-        if item['normalized'] in BASIC_LANDS:
+        norm = item['normalized']
+        # Basic land fast-path
+        if norm in BASIC_LANDS or (norm.split('//'))[0].strip() in BASIC_LANDS:
+            key = norm if norm in BASIC_LANDS else norm.split('//')[0].strip()
             stub = {
                 'name': item['inputName'].strip(),
                 'type_line': 'Basic Land',
                 'mana_cost': '', 'cmc': 0,
                 'colors': [],
-                'color_identity': BASIC_LANDS[item['normalized']],
-                'produced_mana': BASIC_LANDS[item['normalized']],
+                'color_identity': BASIC_LANDS[key],
+                'produced_mana': BASIC_LANDS[key],
                 'card_faces': [],
                 'entersTapped': False,
             }
             resolved.append(classify_card(item, stub))
             continue
-        card = index.get(item['normalized'])
+        # Try each lookup key in order (handles MDFC and repeated-name cards)
+        card = None
+        for key in lookup_keys(norm):
+            card = index.get(key)
+            if card:
+                break
         if card:
             resolved.append(classify_card(item, card))
         else:
