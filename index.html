@@ -7,29 +7,33 @@
   <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=cabinet-grotesk@500,700&display=swap" rel="stylesheet">
   <style>
     :root, [data-theme="light"] {
+      --text-xs: clamp(0.75rem, 0.7rem + 0.25vw, 0.875rem);
       --text-sm: clamp(0.875rem, 0.8rem + 0.35vw, 1rem);
       --text-base: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
       --text-lg: clamp(1.125rem, 1rem + 0.75vw, 1.5rem);
       --text-xl: clamp(1.5rem, 1.2rem + 1.25vw, 2rem);
       --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem;
-      --color-bg: #f7f6f2; --color-surface: #f9f8f5; --color-surface-2: #fbfbf9;
-      --color-text: #28251d; --color-text-muted: #7a7974;
+      --color-bg: #f7f6f2; --color-surface: #f9f8f5; --color-surface-2: #fbfbf9; --color-surface-3: #edeae5;
+      --color-text: #28251d; --color-text-muted: #7a7974; --color-text-faint: #bab9b4;
       --color-primary: #01696f; --color-primary-hover: #0c4e54; --color-primary-highlight: #cedcd8;
       --color-success: #437a22; --color-success-highlight: #d4dfcc;
       --color-warning: #964219; --color-warning-highlight: #ddcfc6;
       --color-error: #a12c7b; --color-error-highlight: #e0ced7;
       --color-t1: #01696f; --color-t2: #4a7fb5; --color-t3: #7a3bb5;
-      --radius: 0.9rem; --radius-full: 9999px;
+      --color-land: #437a22; --color-mana: #964219; --color-cast: #01696f;
+      --radius: 0.9rem; --radius-sm: 0.4rem; --radius-full: 9999px;
       --font-body: 'Satoshi', Inter, sans-serif; --font-display: 'Cabinet Grotesk', 'Satoshi', sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
     }
     [data-theme="dark"] {
-      --color-bg:#171614; --color-surface:#1c1b19; --color-surface-2:#201f1d;
-      --color-text:#cdccca; --color-text-muted:#9a9996;
+      --color-bg:#171614; --color-surface:#1c1b19; --color-surface-2:#201f1d; --color-surface-3:#2d2c2a;
+      --color-text:#cdccca; --color-text-muted:#9a9996; --color-text-faint:#5a5957;
       --color-primary:#4f98a3; --color-primary-hover:#227f8b; --color-primary-highlight:#313b3b;
       --color-success:#6daa45; --color-success-highlight:#3a4435;
       --color-warning:#bb653b; --color-warning-highlight:#564942;
       --color-error:#d163a7; --color-error-highlight:#4c3d46;
-      --color-t1: #4f98a3; --color-t2: #6a9fd4; --color-t3: #a06be0;
+      --color-t1:#4f98a3; --color-t2:#6a9fd4; --color-t3:#a06be0;
+      --color-land:#6daa45; --color-mana:#bb653b; --color-cast:#4f98a3;
     }
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body { font: var(--text-base)/1.55 var(--font-body); background: var(--color-bg); color: var(--color-text); padding: var(--space-6); }
@@ -41,11 +45,11 @@
     .grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: var(--space-6); }
     .card { background: var(--color-surface); border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent); border-radius: var(--radius); padding: var(--space-5); }
     textarea, input { width: 100%; background: var(--color-surface-2); border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent); border-radius: calc(var(--radius) - 0.2rem); padding: var(--space-4); }
-    textarea { min-height: 28rem; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    textarea { min-height: 28rem; resize: vertical; font-family: var(--font-mono); }
     label { display: block; font-size: var(--text-sm); font-weight: 700; margin-bottom: var(--space-2); }
     .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
     .actions { display: flex; gap: var(--space-3); margin-top: var(--space-5); flex-wrap: wrap; }
-    .btn { min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-full); border: 1px solid transparent; cursor: pointer; }
+    .btn { min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-full); border: 1px solid transparent; cursor: pointer; transition: background 150ms ease; }
     .btn-primary { background: var(--color-primary); color: #fff; }
     .btn-primary:hover { background: var(--color-primary-hover); }
     .btn-secondary { background: var(--color-surface-2); border-color: color-mix(in srgb, var(--color-text) 12%, transparent); }
@@ -62,59 +66,104 @@
     th, td { text-align: left; padding: .8rem 0; border-bottom: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent); vertical-align: top; }
     th { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--color-text-muted); }
 
-    /* Decision tree section */
-    .trees-section { margin-top: var(--space-6); }
-    .trees-section h2 { font: 700 var(--text-lg)/1.1 var(--font-display); margin-bottom: var(--space-2); }
-    .trees-section .sub { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-5); }
+    /* ── Trees section ── */
+    .trees-section { margin-top: var(--space-8); }
+    .trees-section > h2 { font: 700 var(--text-lg)/1.1 var(--font-display); margin-bottom: var(--space-2); }
+    .trees-section > .sub { font-size: var(--text-sm); color: var(--color-text-muted); margin-bottom: var(--space-5); }
+
     .trees-scroll { display: flex; gap: var(--space-5); overflow-x: auto; padding-bottom: var(--space-3); }
+
     .tree-card {
       flex: 0 0 auto;
+      width: 260px;
       background: var(--color-surface);
       border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent);
       border-radius: var(--radius);
-      padding: var(--space-5);
-      min-width: 180px;
+      overflow: hidden;
     }
-    .tree-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
-    .tree-nodes { display: flex; flex-direction: column; align-items: flex-start; gap: 0; }
-    .tree-node { display: flex; flex-direction: column; align-items: flex-start; }
-    .tree-connector { width: 2px; height: 28px; margin-left: 15px; background: color-mix(in srgb, var(--color-text) 15%, transparent); }
-    .node-row { display: flex; align-items: center; gap: var(--space-3); }
-    .node-badge {
-      width: 30px; height: 30px; border-radius: var(--radius-full);
-      display: flex; align-items: center; justify-content: center;
-      font: 700 .72rem/1 var(--font-display);
+
+    /* Opening hand strip */
+    .hand-strip {
+      padding: var(--space-4);
+      border-bottom: 1px solid color-mix(in srgb, var(--color-text) 8%, transparent);
+      background: var(--color-surface-2);
+    }
+    .hand-strip-label {
+      font-size: .72rem; text-transform: uppercase; letter-spacing: .08em;
+      color: var(--color-text-muted); margin-bottom: var(--space-2);
+    }
+    .hand-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+    .chip {
+      font-size: .72rem; font-weight: 500;
+      padding: 2px 8px;
+      border-radius: var(--radius-full);
+      background: var(--color-surface-3);
+      color: var(--color-text-muted);
+      white-space: nowrap;
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chip.is-land { background: color-mix(in srgb, var(--color-land) 12%, var(--color-surface)); color: var(--color-land); }
+    .chip.is-mana { background: color-mix(in srgb, var(--color-mana) 12%, var(--color-surface)); color: var(--color-mana); }
+
+    /* Turn nodes */
+    .turns-list { padding: var(--space-4); display: flex; flex-direction: column; gap: 0; }
+    .turn-node { display: flex; flex-direction: column; }
+    .turn-connector { width: 2px; height: 20px; margin-left: 14px; background: color-mix(in srgb, var(--color-text) 12%, transparent); }
+    .turn-row { display: flex; gap: var(--space-3); align-items: flex-start; }
+    .turn-badge {
       flex-shrink: 0;
-      color: #fff;
+      width: 28px; height: 28px; border-radius: var(--radius-full);
+      display: flex; align-items: center; justify-content: center;
+      font: 700 .7rem/1 var(--font-display); color: #fff;
     }
-    .node-badge.t1 { background: var(--color-t1); }
-    .node-badge.t2 { background: var(--color-t2); }
-    .node-badge.t3 { background: var(--color-t3); }
-    .node-text { font-size: var(--text-sm); font-weight: 500; line-height: 1.3; }
-    .node-skip { font-size: var(--text-sm); color: var(--color-text-muted); font-style: italic; }
+    .turn-badge.t1 { background: var(--color-t1); }
+    .turn-badge.t2 { background: var(--color-t2); }
+    .turn-badge.t3 { background: var(--color-t3); }
+
+    .turn-detail { flex: 1; min-width: 0; font-size: var(--text-sm); }
+    .turn-detail .no-play { color: var(--color-text-faint); font-style: italic; }
+
+    .detail-row { display: flex; align-items: baseline; gap: 5px; margin-bottom: 3px; line-height: 1.35; }
+    .detail-row:last-child { margin-bottom: 0; }
+    .detail-label {
+      font-size: .68rem; text-transform: uppercase; letter-spacing: .06em;
+      color: var(--color-text-faint); flex-shrink: 0; width: 38px;
+    }
+    .detail-value { font-size: .82rem; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cast-value { font-size: .88rem; font-weight: 600; color: var(--color-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .mv-badge {
+      font-size: .68rem; font-weight: 700;
+      background: color-mix(in srgb, var(--color-primary) 15%, var(--color-surface));
+      color: var(--color-primary);
+      padding: 1px 6px; border-radius: var(--radius-full);
+      flex-shrink: 0;
+    }
+    .mana-cost { font-family: var(--font-mono); font-size: .75rem; color: var(--color-text-muted); flex-shrink: 0; }
+
     .empty-trees { padding: var(--space-8) 0; text-align: center; color: var(--color-text-muted); font-size: var(--text-sm); }
 
     @media (max-width: 900px) {
       .grid, .controls { grid-template-columns: 1fr; }
       textarea { min-height: 18rem; }
-      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <div>
-        <h1>MTG Playable Hands</h1>
-        <div class="muted">Paste a Commander decklist and analyze turn-3 playability.</div>
-      </div>
-      <button class="btn btn-secondary" id="themeBtn" type="button">Theme</button>
+<div class="wrap">
+  <div class="top">
+    <div>
+      <h1>MTG Playable Hands</h1>
+      <div class="muted">Paste a Commander decklist and analyze turn-3 playability.</div>
     </div>
+    <button class="btn btn-secondary" id="themeBtn" type="button">Theme</button>
+  </div>
 
-    <div class="grid">
-      <section class="card">
-        <label for="decklist">Decklist</label>
-        <textarea id="decklist">1 Sol Ring
+  <div class="grid">
+    <section class="card">
+      <label for="decklist">Decklist</label>
+      <textarea id="decklist">1 Sol Ring
 1 Arcane Signet
 1 Fellwar Stone
 1 Nature's Lore
@@ -210,200 +259,235 @@
 1 Finale of Revelation
 1 Winds of Abandon
 1 Sylvan Library</textarea>
-        <div class="controls">
-          <div>
-            <label for="simulations">Simulations</label>
-            <input id="simulations" type="number" min="1000" step="1000" value="10000">
-          </div>
-          <div>
-            <label for="turnsSeen">Extra draws</label>
-            <input id="turnsSeen" type="number" min="0" max="3" step="1" value="3">
-          </div>
-        </div>
-        <div class="actions">
-          <button class="btn btn-primary" id="analyzeBtn" type="button">Analyze</button>
-          <button class="btn btn-secondary" id="downloadBtn" type="button">Download JSON</button>
-        </div>
-        <div id="status" class="status warn">Ready.</div>
-      </section>
+      <div class="controls">
+        <div><label for="simulations">Simulations</label><input id="simulations" type="number" min="1000" step="1000" value="10000"></div>
+        <div><label for="turnsSeen">Extra draws</label><input id="turnsSeen" type="number" min="0" max="3" step="1" value="3"></div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-primary" id="analyzeBtn" type="button">Analyze</button>
+        <button class="btn btn-secondary" id="downloadBtn" type="button">Download JSON</button>
+      </div>
+      <div id="status" class="status warn">Ready.</div>
+    </section>
 
-      <aside class="card">
-        <div class="stats">
-          <div class="stat"><div class="eyebrow">Playable hands</div><div class="value" id="playablePct">—</div><div class="note" id="playableNote">Run analysis.</div></div>
-          <div class="stat"><div class="eyebrow">Curve rate</div><div class="value" id="curvePct">—</div><div class="note">On or above curve through turn 3.</div></div>
-          <div class="stat"><div class="eyebrow">Has a play</div><div class="value" id="playPct">—</div><div class="note">Castable by turn 3.</div></div>
-          <div class="stat"><div class="eyebrow">Average MV</div><div class="value" id="avgMv">—</div><div class="note">Across nonlands.</div></div>
-        </div>
-        <table>
-          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
-          <tbody id="profile"></tbody>
-        </table>
-      </aside>
-    </div>
-
-    <!-- Decision Tree Section -->
-    <div class="trees-section">
-      <h2>Example Opening Sequences</h2>
-      <div class="sub">Sample playable hands from the simulation — what gets cast each turn.</div>
-      <div id="treesContainer"><div class="empty-trees">Run analysis to see example sequences.</div></div>
-    </div>
+    <aside class="card">
+      <div class="stats">
+        <div class="stat"><div class="eyebrow">Playable hands</div><div class="value" id="playablePct">—</div><div class="note" id="playableNote">Run analysis.</div></div>
+        <div class="stat"><div class="eyebrow">Curve rate</div><div class="value" id="curvePct">—</div><div class="note">On or above curve through turn 3.</div></div>
+        <div class="stat"><div class="eyebrow">Has a play</div><div class="value" id="playPct">—</div><div class="note">Castable by turn 3.</div></div>
+        <div class="stat"><div class="eyebrow">Average MV</div><div class="value" id="avgMv">—</div><div class="note">Across nonlands.</div></div>
+      </div>
+      <table>
+        <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+        <tbody id="profile"></tbody>
+      </table>
+    </aside>
   </div>
 
-  <script>
-    let lastResult = null;
-    const els = {
-      decklist: document.getElementById('decklist'),
-      simulations: document.getElementById('simulations'),
-      turnsSeen: document.getElementById('turnsSeen'),
-      analyzeBtn: document.getElementById('analyzeBtn'),
-      downloadBtn: document.getElementById('downloadBtn'),
-      status: document.getElementById('status'),
-      playablePct: document.getElementById('playablePct'),
-      playableNote: document.getElementById('playableNote'),
-      curvePct: document.getElementById('curvePct'),
-      playPct: document.getElementById('playPct'),
-      avgMv: document.getElementById('avgMv'),
-      profile: document.getElementById('profile'),
-      themeBtn: document.getElementById('themeBtn'),
-      treesContainer: document.getElementById('treesContainer'),
-    };
+  <!-- Decision Tree Section -->
+  <div class="trees-section">
+    <h2>Example Opening Sequences</h2>
+    <div class="sub">Sample playable hands — opening 7 cards, then what happens each turn.</div>
+    <div id="treesContainer"><div class="empty-trees">Run analysis to see example sequences.</div></div>
+  </div>
+</div>
 
-    const TURN_COLORS = ['t1', 't2', 't3'];
-    const TURN_LABELS = ['T1', 'T2', 'T3'];
+<script>
+  let lastResult = null;
+  const els = {
+    decklist: document.getElementById('decklist'),
+    simulations: document.getElementById('simulations'),
+    turnsSeen: document.getElementById('turnsSeen'),
+    analyzeBtn: document.getElementById('analyzeBtn'),
+    downloadBtn: document.getElementById('downloadBtn'),
+    status: document.getElementById('status'),
+    playablePct: document.getElementById('playablePct'),
+    playableNote: document.getElementById('playableNote'),
+    curvePct: document.getElementById('curvePct'),
+    playPct: document.getElementById('playPct'),
+    avgMv: document.getElementById('avgMv'),
+    profile: document.getElementById('profile'),
+    themeBtn: document.getElementById('themeBtn'),
+    treesContainer: document.getElementById('treesContainer'),
+  };
 
-    function renderTrees(sequences) {
-      if (!sequences || sequences.length === 0) {
-        els.treesContainer.innerHTML = '<div class="empty-trees">No example sequences captured.</div>';
-        return;
-      }
+  const BADGE_CLASS = ['t1', 't2', 't3'];
+  const TURN_LABEL = ['T1', 'T2', 'T3'];
 
-      const scroll = document.createElement('div');
-      scroll.className = 'trees-scroll';
+  // Known land names for chip colouring (rough heuristic)
+  const LAND_WORDS = ['island', 'plains', 'forest', 'mountain', 'swamp', 'tower', 'pool', 'haven', 'reach',
+    'land', 'gate', 'grove', 'hearth', 'moor', 'strand', 'heath', 'mine', 'vista', 'mesa', 'lagoon',
+    'headquarters', 'fortress', 'harbor', 'wastes', 'beacon', 'coast', 'expanse'];
+  const MANA_WORDS = ['signet', 'talisman', 'sol ring', 'mox', 'bird', 'mystic', 'pilgrim', 'elves',
+    'bloom tender', 'faeburrow', 'caravan', 'myr', 'stone', 'vault', 'crypt', 'dynamo'];
 
-      sequences.forEach((seq, i) => {
-        const card = document.createElement('div');
-        card.className = 'tree-card';
+  function chipClass(name) {
+    const n = name.toLowerCase();
+    if (LAND_WORDS.some(w => n.includes(w))) return 'is-land';
+    if (MANA_WORDS.some(w => n.includes(w))) return 'is-mana';
+    return '';
+  }
 
-        const label = document.createElement('div');
-        label.className = 'tree-label';
-        label.textContent = `Hand ${i + 1}`;
-        card.appendChild(label);
+  function el(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
 
-        const nodesWrap = document.createElement('div');
-        nodesWrap.className = 'tree-nodes';
+  function renderTrees(sequences) {
+    if (!sequences || sequences.length === 0) {
+      els.treesContainer.innerHTML = '<div class="empty-trees">No example sequences captured.</div>';
+      return;
+    }
+    const scroll = el('div', 'trees-scroll');
 
-        // Build a map of turn -> card name
-        const byTurn = {};
-        (seq || []).forEach(step => { byTurn[step.turn] = step.card; });
+    sequences.forEach((seq, i) => {
+      const card = el('div', 'tree-card');
 
-        [1, 2, 3].forEach((turn, idx) => {
-          const nodeWrap = document.createElement('div');
-          nodeWrap.className = 'tree-node';
+      // ── Opening hand strip ──
+      const strip = el('div', 'hand-strip');
+      const stripLabel = el('div', 'hand-strip-label', `Hand ${i + 1} — Opening 7`);
+      const chips = el('div', 'hand-chips');
+      (seq.openingHand || []).forEach(name => {
+        const chip = el('span', `chip ${chipClass(name)}`, name);
+        chips.appendChild(chip);
+      });
+      strip.appendChild(stripLabel);
+      strip.appendChild(chips);
+      card.appendChild(strip);
 
-          // Connector line above (except first)
-          if (idx > 0) {
-            const line = document.createElement('div');
-            line.className = 'tree-connector';
-            nodeWrap.appendChild(line);
+      // ── Turn nodes ──
+      const turnsList = el('div', 'turns-list');
+      (seq.turns || []).forEach((t, idx) => {
+        const node = el('div', 'turn-node');
+        if (idx > 0) node.appendChild(el('div', 'turn-connector'));
+
+        const row = el('div', 'turn-row');
+        const badge = el('div', `turn-badge ${BADGE_CLASS[idx]}`, TURN_LABEL[idx]);
+        row.appendChild(badge);
+
+        const detail = el('div', 'turn-detail');
+
+        if (!t.landPlayed && !t.cast) {
+          detail.appendChild(el('div', 'no-play', 'No land, no play'));
+        } else {
+          // Land played
+          if (t.landPlayed) {
+            const r = el('div', 'detail-row');
+            r.appendChild(el('span', 'detail-label', 'Land'));
+            r.appendChild(el('span', 'detail-value', t.landPlayed));
+            detail.appendChild(r);
           }
-
-          const row = document.createElement('div');
-          row.className = 'node-row';
-
-          const badge = document.createElement('div');
-          badge.className = `node-badge ${TURN_COLORS[idx]}`;
-          badge.textContent = TURN_LABELS[idx];
-          row.appendChild(badge);
-
-          const textEl = document.createElement('div');
-          if (byTurn[turn]) {
-            textEl.className = 'node-text';
-            textEl.textContent = byTurn[turn];
-          } else {
-            textEl.className = 'node-skip';
-            textEl.textContent = 'No play';
+          // Mana pool
+          if (t.manaPool && Object.keys(t.manaPool).length > 0) {
+            const poolStr = Object.entries(t.manaPool)
+              .filter(([,v]) => v > 0)
+              .map(([k, v]) => `${v}{${k}}`)
+              .join(' ');
+            const r = el('div', 'detail-row');
+            r.appendChild(el('span', 'detail-label', 'Mana'));
+            r.appendChild(el('span', 'mana-cost', poolStr));
+            detail.appendChild(r);
           }
-          row.appendChild(textEl);
-          nodeWrap.appendChild(row);
-          nodesWrap.appendChild(nodeWrap);
-        });
+          // Cast
+          if (t.cast) {
+            const r = el('div', 'detail-row');
+            r.appendChild(el('span', 'detail-label', 'Cast'));
+            const castName = el('span', 'cast-value', t.cast.name);
+            r.appendChild(castName);
+            if (t.cast.manaCost) r.appendChild(el('span', 'mana-cost', t.cast.manaCost));
+            r.appendChild(el('span', 'mv-badge', `MV ${t.cast.mv}`));
+            detail.appendChild(r);
+          } else if (t.landPlayed) {
+            const r = el('div', 'detail-row');
+            r.appendChild(el('span', 'detail-label', 'Cast'));
+            r.appendChild(el('span', 'no-play', 'No play'));
+            detail.appendChild(r);
+          }
+        }
 
-        card.appendChild(nodesWrap);
-        scroll.appendChild(card);
+        row.appendChild(detail);
+        node.appendChild(row);
+        turnsList.appendChild(node);
       });
 
-      els.treesContainer.innerHTML = '';
-      els.treesContainer.appendChild(scroll);
-    }
-
-    function setStatus(kind, text) {
-      els.status.className = `status ${kind}`;
-      els.status.textContent = text;
-    }
-
-    async function analyze() {
-      setStatus('warn', 'Running analysis...');
-      els.analyzeBtn.disabled = true;
-      try {
-        const payload = {
-          decklist: els.decklist.value,
-          simulations: Number(els.simulations.value || 10000),
-          turns_seen: Number(els.turnsSeen.value || 3)
-        };
-        const res = await fetch('/api/analyze', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const result = await res.json();
-        if (!res.ok) throw new Error(result.error || 'Analysis failed');
-        lastResult = result;
-
-        els.playablePct.textContent = `${result.results.playableHandsPct.toFixed(1)}%`;
-        els.playableNote.textContent = `${result.deckSize} resolved cards.`;
-        els.curvePct.textContent = `${result.results.onOrAboveCurveThroughTurn3Pct.toFixed(1)}%`;
-        els.playPct.textContent = `${result.results.hasPlayableSpellByTurn3Pct.toFixed(1)}%`;
-        els.avgMv.textContent = Number(result.averageNonlandManaValue || 0).toFixed(2);
-
-        const rows = [
-          ['Deck size', result.deckSize],
-          ['Color identity', result.colorIdentity],
-          ['Lands', result.lands],
-          ['Mana permanents', result.manaPermanents],
-          ['Simulations', result.simulations],
-          ['Missing cards', result.missing.length ? result.missing.slice(0, 6).join(', ') : 'None']
-        ];
-        els.profile.innerHTML = rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('');
-
-        renderTrees(result.exampleSequences);
-
-        setStatus(
-          result.missing.length ? 'warn' : 'ok',
-          result.missing.length
-            ? `Analysis complete. Missing ${result.missing.length} unmatched card(s).`
-            : 'Analysis complete.'
-        );
-      } catch (err) {
-        setStatus('err', err.message || 'Analysis failed.');
-      } finally {
-        els.analyzeBtn.disabled = false;
-      }
-    }
-
-    els.analyzeBtn.addEventListener('click', analyze);
-    els.downloadBtn.addEventListener('click', () => {
-      if (!lastResult) return setStatus('warn', 'Run analysis before downloading.');
-      const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(blob);
-      a.download = 'mtg-playable-hands-result.json';
-      a.click();
-      URL.revokeObjectURL(a.href);
+      card.appendChild(turnsList);
+      scroll.appendChild(card);
     });
-    els.themeBtn.addEventListener('click', () => {
-      const root = document.documentElement;
-      root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
-    });
-  </script>
+
+    els.treesContainer.innerHTML = '';
+    els.treesContainer.appendChild(scroll);
+  }
+
+  function setStatus(kind, text) {
+    els.status.className = `status ${kind}`;
+    els.status.textContent = text;
+  }
+
+  async function analyze() {
+    setStatus('warn', 'Running analysis...');
+    els.analyzeBtn.disabled = true;
+    try {
+      const payload = {
+        decklist: els.decklist.value,
+        simulations: Number(els.simulations.value || 10000),
+        turns_seen: Number(els.turnsSeen.value || 3)
+      };
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const result = await res.json();
+      if (!res.ok) throw new Error(result.error || 'Analysis failed');
+      lastResult = result;
+
+      els.playablePct.textContent = `${result.results.playableHandsPct.toFixed(1)}%`;
+      els.playableNote.textContent = `${result.deckSize} resolved cards.`;
+      els.curvePct.textContent = `${result.results.onOrAboveCurveThroughTurn3Pct.toFixed(1)}%`;
+      els.playPct.textContent = `${result.results.hasPlayableSpellByTurn3Pct.toFixed(1)}%`;
+      els.avgMv.textContent = Number(result.averageNonlandManaValue || 0).toFixed(2);
+
+      const rows = [
+        ['Deck size', result.deckSize],
+        ['Color identity', result.colorIdentity],
+        ['Lands', result.lands],
+        ['Mana permanents', result.manaPermanents],
+        ['Simulations', result.simulations],
+        ['Missing cards', result.missing.length ? result.missing.slice(0, 6).join(', ') : 'None']
+      ];
+      els.profile.innerHTML = rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('');
+
+      renderTrees(result.exampleSequences);
+
+      setStatus(
+        result.missing.length ? 'warn' : 'ok',
+        result.missing.length
+          ? `Analysis complete. Missing ${result.missing.length} unmatched card(s).`
+          : 'Analysis complete.'
+      );
+    } catch (err) {
+      setStatus('err', err.message || 'Analysis failed.');
+    } finally {
+      els.analyzeBtn.disabled = false;
+    }
+  }
+
+  els.analyzeBtn.addEventListener('click', analyze);
+  els.downloadBtn.addEventListener('click', () => {
+    if (!lastResult) return setStatus('warn', 'Run analysis before downloading.');
+    const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'mtg-playable-hands-result.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  els.themeBtn.addEventListener('click', () => {
+    const root = document.documentElement;
+    root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+</script>
 </body>
 </html>
