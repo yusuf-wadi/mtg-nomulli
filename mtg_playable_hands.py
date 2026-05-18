@@ -7,10 +7,19 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
+CACHE_VERSION = '5'
 
-# Bump this whenever index-building logic changes
-CACHE_VERSION = '4'
+# Basic land names -> color they produce. These NEVER need Scryfall lookup.
+BASIC_LANDS = {
+    'plains':   ['W'],
+    'island':   ['U'],
+    'swamp':    ['B'],
+    'mountain': ['R'],
+    'forest':   ['G'],
+    'wastes':   ['C'],
+}
 
+# Land subtype -> mana symbol (for non-basic lands with basic subtypes)
 SUBTYPE_MANA = {
     'plains':   'W',
     'island':   'U',
@@ -31,10 +40,9 @@ def fetch_json(url: str):
 
 
 def infer_produced_from_type(type_line: str):
-    """Always infer mana production from type line subtypes (e.g. Basic Land — Island -> ['U'])."""
+    """Infer mana production from land subtype (e.g. 'Basic Land \u2014 Island' -> ['U'])."""
     tl = (type_line or '').lower()
     produced = []
-    # Split on em-dash or regular dash to get subtypes
     after_dash = tl.split('\u2014')[-1] if '\u2014' in tl else tl.split('-')[-1]
     for sub in after_dash.split():
         color = SUBTYPE_MANA.get(sub.strip())
@@ -54,7 +62,6 @@ def ensure_bulk_data():
     if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
-    # Stale or missing — rebuild
     manifest = fetch_json(BULK_API)
     bulk = next((x for x in manifest.get('data', []) if x.get('type') == 'oracle_cards'), None)
     if not bulk:
@@ -69,12 +76,10 @@ def ensure_bulk_data():
             if face.get('name'):
                 names.add(normalize_name(face['name']))
         type_line = card.get('type_line', '')
-        # Always infer produced_mana from type line for lands
-        # Scryfall bulk data has produced_mana=null for basic lands
         produced = list(card.get('produced_mana') or [])
+        # Always supplement with type-line inference for lands
         if 'land' in type_line.lower():
-            inferred = infer_produced_from_type(type_line)
-            for c in inferred:
+            for c in infer_produced_from_type(type_line):
                 if c not in produced:
                     produced.append(c)
         compact = {
@@ -113,11 +118,9 @@ def parse_mana_cost_symbols(mana_cost: str):
 def summarize_face_data(card):
     face = (card.get('card_faces') or [None])[0]
     type_line = card.get('type_line') or (face or {}).get('type_line', '')
-    # Start from stored produced_mana, then always supplement with type-line inference for lands
     produced = list(card.get('produced_mana') or [])
     if 'land' in type_line.lower():
-        inferred = infer_produced_from_type(type_line)
-        for c in inferred:
+        for c in infer_produced_from_type(type_line):
             if c not in produced:
                 produced.append(c)
     return {
@@ -131,12 +134,39 @@ def summarize_face_data(card):
 
 
 def classify_card(entry, card):
+    norm = entry['normalized']
+
+    # --- BASIC LAND FAST PATH ---
+    # Check by normalized input name first (handles 'island', 'plains', etc.)
+    basic_colors = BASIC_LANDS.get(norm)
+    if basic_colors is None:
+        # Also check the card's actual name from Scryfall
+        basic_colors = BASIC_LANDS.get((card.get('name') or '').lower().strip())
+
+    if basic_colors is not None:
+        type_line = card.get('type_line', f'Basic Land')
+        cost_syms = parse_mana_cost_symbols('')
+        return {
+            **entry,
+            'name': card.get('name', entry['inputName']),
+            'mana_cost': '',
+            'manaValue': 0,
+            'type_line': type_line,
+            'colors': [],
+            'color_identity': basic_colors,
+            'produced_mana': basic_colors,
+            'isLand': True,
+            'isPermanent': True,
+            'isManaPermanent': False,
+            'costSymbols': cost_syms,
+        }
+
+    # --- NORMAL SCRYFALL PATH ---
     face = summarize_face_data(card)
     type_line = face['type_line'].lower()
     is_land = 'land' in type_line
     is_permanent = any(x in type_line for x in ['artifact', 'creature', 'enchantment', 'planeswalker', 'battle', 'land'])
     produced = [c for c in face['produced_mana'] if c in ['W', 'U', 'B', 'R', 'G', 'C']]
-    # Final safety net: if still empty and it's a land, infer from type line
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     return {
@@ -238,9 +268,17 @@ def hydrate_deck(deck_text: str):
     parsed = parse_decklist(deck_text)
     resolved, missing = [], []
     for item in parsed:
+        # Basic lands don't need Scryfall — handle directly
+        if item['normalized'] in BASIC_LANDS:
+            # Build a minimal stub so classify_card can fast-path
+            stub = {'name': item['inputName'].strip(), 'type_line': 'Basic Land', 'mana_cost': '', 'cmc': 0, 'colors': [], 'color_identity': BASIC_LANDS[item['normalized']], 'produced_mana': BASIC_LANDS[item['normalized']], 'card_faces': []}
+            resolved.append(classify_card(item, stub))
+            continue
         card = index.get(item['normalized'])
-        if card: resolved.append(classify_card(item, card))
-        else: missing.append(item['inputName'])
+        if card:
+            resolved.append(classify_card(item, card))
+        else:
+            missing.append(item['inputName'])
     return resolved, missing
 
 
