@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '11'
+CACHE_VERSION = '12'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -123,6 +123,7 @@ def ensure_bulk_data():
     if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
+    # Bust stale cache
     for p in (BULK_PATH, INDEX_PATH, VERSION_PATH):
         if p.exists():
             p.unlink()
