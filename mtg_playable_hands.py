@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '13'
+CACHE_VERSION = '14'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -162,16 +162,13 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
     Parse a Scryfall mana cost string into pip counts.
 
     Rules:
-    - {W}/{U}/{B}/{R}/{G}/{C}  → 1 colored pip each
-    - {N}                      → N generic
-    - {X}/{Y}/{Z}              → 1 generic minimum (X spells cost at least 1)
-    - {W/U} etc (color hybrid) → 1 generic (can be paid by either color; we
-                                  conservatively treat as 1 generic requirement
-                                  since any mana satisfies it)
-    - {2/W} etc (Phyrexian-2)  → 2 generic (the numeric alternative is the
-                                  cheaper non-life-pay path)
-    - {W/P} etc (Phyrexian)    → 1 generic (can pay 2 life; treat as 1 generic)
-    - {S} (snow)               → 1 generic
+    - {W}/{U}/{B}/{R}/{G}/{C}  -> 1 colored pip each
+    - {N}                      -> N generic
+    - {X}/{Y}/{Z}              -> 1 generic minimum (X spells cost at least 1)
+    - {W/U} etc (color hybrid) -> 1 generic (either color works)
+    - {2/W} etc (numeric hyb)  -> 2 generic (numeric alternative is the cost)
+    - {W/P} etc (Phyrexian)    -> 0 mana (player always pays 2 life instead)
+    - {S} (snow)               -> 1 generic
     """
     counts = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0, 'generic': 0}
     for sym in re.findall(r'\{([^}]+)\}', mana_cost or ''):
@@ -188,12 +185,12 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
             color_parts = [p for p in parts if p in ('W', 'U', 'B', 'R', 'G', 'C')]
             numeric_parts = [int(p) for p in parts if p.isdigit()]
             phyrexian = 'P' in parts
-            if numeric_parts and color_parts:
-                # {2/W} style: numeric alt is the generic cost
+            if phyrexian:
+                # {W/P}: player always pays 2 life — costs 0 mana for sim purposes
+                pass
+            elif numeric_parts and color_parts:
+                # {2/W} style: numeric alt is the mana cost
                 counts['generic'] += numeric_parts[0]
-            elif phyrexian:
-                # {W/P}: pay 1 of that color OR 2 life — treat as 1 generic
-                counts['generic'] += 1
             elif color_parts:
                 # {W/U} color hybrid: either color works, treat as 1 generic
                 counts['generic'] += 1
@@ -267,8 +264,6 @@ def classify_card(entry, card):
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
-    # manaValue for display: use Scryfall's cmc (authoritative), but for X-spells
-    # where cmc=0 at rest, use our effective_cmc which counts X as 1 minimum.
     scryfall_cmc = face['cmc']
     eff_cmc = effective_cmc(cost_symbols)
     mana_value = max(scryfall_cmc, float(eff_cmc)) if not is_land else 0.0
@@ -425,8 +420,7 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         if total_mana < turn:
             curve_ok = False
         # Castability: rely entirely on can_pay_cost (full symbol check).
-        # No manaValue guard — cost_symbols is the authoritative requirement,
-        # including X=1 minimum and correct hybrid/generic breakdown.
+        # No manaValue guard — cost_symbols is the authoritative requirement.
         castable = [
             c for c in hand
             if not c['isLand']
@@ -519,8 +513,7 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
             has_play_count += 1
     lands = sum(1 for c in hydrated if c['isLand'])
     mana_perms = sum(1 for c in hydrated if c['isManaPermanent'])
-    nonlands = [c for c in hydrated if not c['isLand']
-    ]
+    nonlands = [c for c in hydrated if not c['isLand']]
     avg_mv = (sum(c['manaValue'] for c in nonlands) / len(nonlands)) if nonlands else 0
     colors = ''.join(sorted({x for c in hydrated for x in c.get('color_identity', [])})) or 'C'
     tapped_land_count = sum(1 for c in hydrated if c.get('isLand') and c.get('entersTapped'))
