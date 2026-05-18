@@ -33,10 +33,6 @@ ENTERS_TAPPED_RE = re.compile(
 
 
 def normalize_name(raw: str) -> str:
-    """Normalize a card name for index lookup.
-    Strips leading quantity, parenthetical set codes, and extra whitespace.
-    Does NOT strip // here — MDFC splitting is handled in lookup_keys().
-    """
     s = re.sub(r'^[0-9]+x?\s+', '', raw.lower())
     s = re.sub(r'\([^)]*\)', '', s)
     s = re.sub(r'\s+', ' ', s).strip()
@@ -44,15 +40,6 @@ def normalize_name(raw: str) -> str:
 
 
 def lookup_keys(normalized: str) -> list:
-    """Return an ordered list of index keys to try for a normalized card name.
-    Handles three cases:
-      1. True MDFC: 'valki, god of lies // tibalt, cosmic impostor'
-         -> ['valki, god of lies', 'tibalt, cosmic impostor']
-         (try front face first, fall back to back face)
-      2. Repeated-name: 'soulherder // soulherder'
-         -> ['soulherder']  (deduplicated)
-      3. Plain name: 'counterspell' -> ['counterspell']
-    """
     if '//' not in normalized:
         return [normalized]
     parts = [p.strip() for p in normalized.split('//')]
@@ -130,7 +117,6 @@ def ensure_bulk_data():
         json.dump(data, f)
     idx = {}
     for card in data:
-        # Index by full card name and each individual face name
         names = {normalize_name(card.get('name', ''))}
         for face in card.get('card_faces', []) or []:
             if face.get('name'):
@@ -308,8 +294,15 @@ def spend_mana(cost: dict, pool: dict) -> dict:
 
 
 def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
+    """
+    Returns (pool, sources_used, sources_detail).
+    sources_detail is a list of {name, produced_mana, assigned} dicts:
+      - produced_mana: full XOR list of colors this source can produce
+      - assigned: the color the greedy algo picked for this simulation
+    """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
+    sources_detail = []
     remaining_desired = dict(desired)
     for source in (lands + mana_perms):
         opts = source.get('produced_mana') or ['C']
@@ -322,7 +315,12 @@ def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
             remaining_desired[chosen] = remaining_desired[chosen] - 1
         pool[chosen] = pool.get(chosen, 0) + 1
         sources_used.append(source['name'])
-    return pool, sources_used
+        sources_detail.append({
+            'name': source['name'],
+            'produced_mana': opts,
+            'assigned': chosen,
+        })
+    return pool, sources_used, sources_detail
 
 
 def desired_from_hand(hand: list) -> dict:
@@ -357,6 +355,7 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             'landTapped': False,
             'manaPool': {},
             'manaSources': [],
+            'manaSourcesDetail': [],
             'cast': None
         }
         lands_in_play.extend(tapped_staging)
@@ -383,9 +382,10 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
             turn_log['landPlayed'] = land_to_play['name']
             turn_log['landTapped'] = enters_tapped
         desired_pool = desired_from_hand(hand)
-        pool, sources = build_mana_pool(lands_in_play, mana_perms_in_play, desired_pool)
+        pool, sources, sources_detail = build_mana_pool(lands_in_play, mana_perms_in_play, desired_pool)
         turn_log['manaPool'] = {k: v for k, v in pool.items() if v > 0}
         turn_log['manaSources'] = sources
+        turn_log['manaSourcesDetail'] = sources_detail
         total_mana = sum(pool.values())
         if total_mana < turn:
             curve_ok = False
@@ -433,7 +433,6 @@ def hydrate_deck(deck_text: str):
     resolved, missing = [], []
     for item in parsed:
         norm = item['normalized']
-        # Basic land fast-path
         if norm in BASIC_LANDS or (norm.split('//'))[0].strip() in BASIC_LANDS:
             key = norm if norm in BASIC_LANDS else norm.split('//')[0].strip()
             stub = {
@@ -448,7 +447,6 @@ def hydrate_deck(deck_text: str):
             }
             resolved.append(classify_card(item, stub))
             continue
-        # Try each lookup key in order (handles MDFC and repeated-name cards)
         card = None
         for key in lookup_keys(norm):
             card = index.get(key)

@@ -141,6 +141,7 @@
       flex-shrink: 0;
     }
     .mana-cost { font-family: var(--font-mono); font-size: .75rem; color: var(--color-text-muted); flex-shrink: 0; }
+
     /* Tapped land indicator */
     .tapped-badge {
       font-size: .64rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
@@ -148,6 +149,33 @@
       color: var(--color-warning);
       padding: 1px 5px; border-radius: var(--radius-full);
       flex-shrink: 0;
+    }
+
+    /* Per-source XOR mana display */
+    .mana-sources-wrap {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 3px;
+      font-family: var(--font-mono); font-size: .72rem;
+    }
+    .mana-sep {
+      color: var(--color-text-faint); font-size: .65rem; padding: 0 1px;
+    }
+    /* Single-color source — plain monospace */
+    .mana-sources-wrap > .mana-cost { flex-shrink: 0; }
+    /* Multi-option XOR pill */
+    .mana-xor {
+      display: inline-flex; align-items: center; gap: 1px;
+      background: color-mix(in srgb, var(--color-text) 6%, transparent);
+      border: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent);
+      border-radius: var(--radius-sm);
+      padding: 1px 4px;
+    }
+    .xor-sep { color: var(--color-text-faint); font-size: .6rem; padding: 0 1px; }
+    .xor-pip {
+      font-size: .68rem; font-weight: 500; color: var(--color-text-muted);
+    }
+    /* The greedy-assigned color is bold and full-text colored */
+    .xor-pip.xor-assigned {
+      font-weight: 800; color: var(--color-text);
     }
 
     .empty-trees { padding: var(--space-8) 0; text-align: center; color: var(--color-text-muted); font-size: var(--text-sm); }
@@ -342,6 +370,35 @@
     return e;
   }
 
+  function renderManaSources(detail) {
+    // detail: [{name, produced_mana: [...], assigned: 'X'}, ...]
+    const wrap = document.createElement('span');
+    wrap.className = 'mana-sources-wrap';
+    detail.forEach((src, i) => {
+      if (i > 0) {
+        const sep = el('span', 'mana-sep', '+');
+        wrap.appendChild(sep);
+      }
+      const opts = src.produced_mana || [];
+      if (opts.length === 1) {
+        // single-color / basic — plain {X} display
+        const pip = el('span', 'mana-cost', `{${opts[0]}}`);
+        wrap.appendChild(pip);
+      } else {
+        // multi-option: show XOR pill, bold the assigned color
+        const pill = document.createElement('span');
+        pill.className = 'mana-xor';
+        opts.forEach((c, ci) => {
+          if (ci > 0) pill.appendChild(el('span', 'xor-sep', '/'));
+          const pip = el('span', 'xor-pip' + (c === src.assigned ? ' xor-assigned' : ''), c);
+          pill.appendChild(pip);
+        });
+        wrap.appendChild(pill);
+      }
+    });
+    return wrap;
+  }
+
   function renderTrees(sequences) {
     if (!sequences || sequences.length === 0) {
       els.treesContainer.innerHTML = '<div class="empty-trees">No example sequences captured.</div>';
@@ -374,7 +431,7 @@
         if (!t.landPlayed && !t.cast) {
           detail.appendChild(el('div', 'no-play', 'No land, no play'));
         } else {
-          // Land row — show TAPPED badge if the land enters tapped
+          // Land row
           if (t.landPlayed) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Land'));
@@ -382,8 +439,14 @@
             if (t.landTapped) r.appendChild(el('span', 'tapped-badge', 'Tapped'));
             detail.appendChild(r);
           }
-          // Mana pool
-          if (t.manaPool && Object.keys(t.manaPool).length > 0) {
+          // Mana row — per-source XOR options
+          if (t.manaSourcesDetail && t.manaSourcesDetail.length > 0) {
+            const r = el('div', 'detail-row');
+            r.appendChild(el('span', 'detail-label', 'Mana'));
+            r.appendChild(renderManaSources(t.manaSourcesDetail));
+            detail.appendChild(r);
+          } else if (t.manaPool && Object.keys(t.manaPool).length > 0) {
+            // fallback: flat pool sum
             const poolStr = Object.entries(t.manaPool)
               .filter(([, v]) => v > 0)
               .map(([k, v]) => `${v}{${k}}`)
@@ -393,7 +456,7 @@
             r.appendChild(el('span', 'mana-cost', poolStr));
             detail.appendChild(r);
           }
-          // Cast
+          // Cast row
           if (t.cast) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Cast'));
