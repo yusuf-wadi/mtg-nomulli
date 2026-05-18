@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '9'
+CACHE_VERSION = '10'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -40,9 +40,37 @@ def normalize_name(raw: str) -> str:
 
 
 def lookup_keys(normalized: str) -> list:
-    if '//' not in normalized:
+    """Return ordered index keys to try for a normalized card name.
+
+    Handles three separator styles exported by different tools:
+      ' // ' — EDHREC, Archidekt, Scryfall (double-slash with spaces)
+      ' / '  — Moxfield (single-slash with spaces)
+
+    Cases:
+      1. True MDFC (different faces):
+           'valki, god of lies // tibalt, cosmic impostor'
+           -> ['valki, god of lies', 'tibalt, cosmic impostor']
+         Try front face first, fall back to back face.
+
+      2. Repeated-name card (adventure / flip with same name on both sides):
+           'soulherder // soulherder'
+           -> ['soulherder']  (deduplicated)
+
+      3. Moxfield single-slash:
+           'cosima, god of the voyage / the omenkeel'
+           -> ['cosima, god of the voyage', 'the omenkeel']
+
+      4. Plain name: 'counterspell' -> ['counterspell']
+    """
+    # Pick whichever separator is present; prefer ' // ' over ' / '
+    if ' // ' in normalized:
+        sep = ' // '
+    elif ' / ' in normalized:
+        sep = ' / '
+    else:
         return [normalized]
-    parts = [p.strip() for p in normalized.split('//')]
+
+    parts = [p.strip() for p in normalized.split(sep)]
     seen = []
     for p in parts:
         if p and p not in seen:
@@ -296,9 +324,9 @@ def spend_mana(cost: dict, pool: dict) -> dict:
 def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
     """
     Returns (pool, sources_used, sources_detail).
-    sources_detail is a list of {name, produced_mana, assigned} dicts:
-      - produced_mana: full XOR list of colors this source can produce
-      - assigned: the color the greedy algo picked for this simulation
+    sources_detail: [{name, produced_mana, assigned}]
+      produced_mana — full XOR list of colors this source can produce
+      assigned      — color the greedy algo picked for this simulation
     """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
@@ -433,20 +461,22 @@ def hydrate_deck(deck_text: str):
     resolved, missing = [], []
     for item in parsed:
         norm = item['normalized']
-        if norm in BASIC_LANDS or (norm.split('//'))[0].strip() in BASIC_LANDS:
-            key = norm if norm in BASIC_LANDS else norm.split('//')[0].strip()
+        # Basic land fast-path (check first key of lookup_keys against BASIC_LANDS)
+        first_key = lookup_keys(norm)[0]
+        if first_key in BASIC_LANDS:
             stub = {
                 'name': item['inputName'].strip(),
                 'type_line': 'Basic Land',
                 'mana_cost': '', 'cmc': 0,
                 'colors': [],
-                'color_identity': BASIC_LANDS[key],
-                'produced_mana': BASIC_LANDS[key],
+                'color_identity': BASIC_LANDS[first_key],
+                'produced_mana': BASIC_LANDS[first_key],
                 'card_faces': [],
                 'entersTapped': False,
             }
             resolved.append(classify_card(item, stub))
             continue
+        # Try each lookup key in order (handles MDFC, repeated-name, single-slash)
         card = None
         for key in lookup_keys(norm):
             card = index.get(key)
