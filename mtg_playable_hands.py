@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '12'
+CACHE_VERSION = '13'
 
 BASIC_LANDS = {
     'plains':   ['W'],
@@ -40,7 +40,6 @@ def normalize_name(raw: str) -> str:
 
 
 def lookup_keys(normalized: str) -> list:
-    """Return ordered index keys to try for a normalized card name."""
     if ' // ' in normalized:
         sep = ' // '
     elif ' / ' in normalized:
@@ -106,11 +105,6 @@ def _card_cmc(card: dict) -> float:
 
 
 def _produced_mana_for_land(card: dict, type_line: str) -> list:
-    """
-    Build the full XOR list of mana a land can produce.
-    Scryfall's produced_mana already includes C for pain lands (Underground River etc.).
-    We preserve it exactly; only fall back to subtype inference when empty.
-    """
     raw = list(card.get('produced_mana') or [])
     if raw:
         return raw
@@ -123,7 +117,6 @@ def ensure_bulk_data():
     if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
-    # Bust stale cache
     for p in (BULK_PATH, INDEX_PATH, VERSION_PATH):
         if p.exists():
             p.unlink()
@@ -165,6 +158,21 @@ def ensure_bulk_data():
 
 
 def parse_mana_cost_symbols(mana_cost: str) -> dict:
+    """
+    Parse a Scryfall mana cost string into pip counts.
+
+    Rules:
+    - {W}/{U}/{B}/{R}/{G}/{C}  → 1 colored pip each
+    - {N}                      → N generic
+    - {X}/{Y}/{Z}              → 1 generic minimum (X spells cost at least 1)
+    - {W/U} etc (color hybrid) → 1 generic (can be paid by either color; we
+                                  conservatively treat as 1 generic requirement
+                                  since any mana satisfies it)
+    - {2/W} etc (Phyrexian-2)  → 2 generic (the numeric alternative is the
+                                  cheaper non-life-pay path)
+    - {W/P} etc (Phyrexian)    → 1 generic (can pay 2 life; treat as 1 generic)
+    - {S} (snow)               → 1 generic
+    """
     counts = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0, 'generic': 0}
     for sym in re.findall(r'\{([^}]+)\}', mana_cost or ''):
         s = sym.upper()
@@ -173,15 +181,22 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
         elif s in ('W', 'U', 'B', 'R', 'G', 'C'):
             counts[s] += 1
         elif s in ('X', 'Y', 'Z'):
-            pass
+            # X costs have a minimum of 1 — never let a card appear free
+            counts['generic'] += 1
         elif '/' in s:
             parts = s.split('/')
             color_parts = [p for p in parts if p in ('W', 'U', 'B', 'R', 'G', 'C')]
             numeric_parts = [int(p) for p in parts if p.isdigit()]
-            if color_parts:
-                counts['generic'] += 1
-            elif numeric_parts:
+            phyrexian = 'P' in parts
+            if numeric_parts and color_parts:
+                # {2/W} style: numeric alt is the generic cost
                 counts['generic'] += numeric_parts[0]
+            elif phyrexian:
+                # {W/P}: pay 1 of that color OR 2 life — treat as 1 generic
+                counts['generic'] += 1
+            elif color_parts:
+                # {W/U} color hybrid: either color works, treat as 1 generic
+                counts['generic'] += 1
             else:
                 counts['generic'] += 1
         elif s == 'S':
@@ -191,8 +206,9 @@ def parse_mana_cost_symbols(mana_cost: str) -> dict:
     return counts
 
 
-def cmc_from_symbols(cost: dict) -> int:
-    return sum(v for k, v in cost.items() if k != 'generic') + cost.get('generic', 0)
+def effective_cmc(cost_symbols: dict) -> int:
+    """Total mana required: sum of all pips + generic."""
+    return sum(v for k, v in cost_symbols.items() if k != 'generic') + cost_symbols.get('generic', 0)
 
 
 def summarize_face_data(card):
@@ -251,9 +267,11 @@ def classify_card(entry, card):
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
+    # manaValue for display: use Scryfall's cmc (authoritative), but for X-spells
+    # where cmc=0 at rest, use our effective_cmc which counts X as 1 minimum.
     scryfall_cmc = face['cmc']
-    parsed_cmc = cmc_from_symbols(cost_symbols)
-    mana_value = scryfall_cmc if scryfall_cmc > 0 or is_land else float(parsed_cmc)
+    eff_cmc = effective_cmc(cost_symbols)
+    mana_value = max(scryfall_cmc, float(eff_cmc)) if not is_land else 0.0
     return {
         **entry,
         'name': card.get('name', entry['inputName']),
@@ -286,6 +304,11 @@ def parse_decklist(text: str):
 
 
 def can_pay_cost(cost: dict, pool: dict) -> bool:
+    """
+    Check if pool can pay cost.
+    Colored pips must be paid with matching color.
+    Generic can be paid with any remaining mana.
+    """
     remaining = dict(pool)
     for c in ('W', 'U', 'B', 'R', 'G', 'C'):
         need = cost.get(c, 0)
@@ -312,12 +335,6 @@ def spend_mana(cost: dict, pool: dict) -> dict:
 
 
 def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
-    """
-    Returns (pool, sources_used, sources_detail).
-    sources_detail: [{name, produced_mana, assigned}]
-      produced_mana - full XOR list of colors this source can produce
-      assigned      - color the greedy algo picked for this simulation
-    """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
     sources_detail = []
@@ -407,10 +424,12 @@ def evaluate_opening(deck: list, turns_seen: int = 3) -> dict:
         total_mana = sum(pool.values())
         if total_mana < turn:
             curve_ok = False
+        # Castability: rely entirely on can_pay_cost (full symbol check).
+        # No manaValue guard — cost_symbols is the authoritative requirement,
+        # including X=1 minimum and correct hybrid/generic breakdown.
         castable = [
             c for c in hand
             if not c['isLand']
-            and c['manaValue'] <= total_mana
             and can_pay_cost(c['costSymbols'], pool)
         ]
         castable.sort(
@@ -500,7 +519,8 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
             has_play_count += 1
     lands = sum(1 for c in hydrated if c['isLand'])
     mana_perms = sum(1 for c in hydrated if c['isManaPermanent'])
-    nonlands = [c for c in hydrated if not c['isLand']]
+    nonlands = [c for c in hydrated if not c['isLand']
+    ]
     avg_mv = (sum(c['manaValue'] for c in nonlands) / len(nonlands)) if nonlands else 0
     colors = ''.join(sorted({x for c in hydrated for x in c.get('color_identity', [])})) or 'C'
     tapped_land_count = sum(1 for c in hydrated if c.get('isLand') and c.get('entersTapped'))
