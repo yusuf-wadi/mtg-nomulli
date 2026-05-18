@@ -49,10 +49,12 @@
     label { display: block; font-size: var(--text-sm); font-weight: 700; margin-bottom: var(--space-2); }
     .controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-4); }
     .actions { display: flex; gap: var(--space-3); margin-top: var(--space-5); flex-wrap: wrap; }
-    .btn { min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-full); border: 1px solid transparent; cursor: pointer; transition: background 150ms ease; }
+    .btn { min-height: 44px; padding: 0 var(--space-5); border-radius: var(--radius-full); border: 1px solid transparent; cursor: pointer; transition: background 150ms ease, color 150ms ease; }
     .btn-primary { background: var(--color-primary); color: #fff; }
     .btn-primary:hover { background: var(--color-primary-hover); }
     .btn-secondary { background: var(--color-surface-2); border-color: color-mix(in srgb, var(--color-text) 12%, transparent); }
+    .btn-ghost { background: transparent; border-color: color-mix(in srgb, var(--color-text) 15%, transparent); color: var(--color-text-muted); }
+    .btn-ghost:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); color: var(--color-text); }
     .stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
     .stat { background: var(--color-surface-2); border: 1px solid color-mix(in srgb, var(--color-text) 10%, transparent); border-radius: calc(var(--radius) - 0.2rem); padding: var(--space-4); }
     .eyebrow { font-size: .78rem; text-transform: uppercase; letter-spacing: .08em; color: var(--color-text-muted); }
@@ -159,9 +161,7 @@
     .mana-sep {
       color: var(--color-text-faint); font-size: .65rem; padding: 0 1px;
     }
-    /* Single-color source — plain monospace */
     .mana-sources-wrap > .mana-cost { flex-shrink: 0; }
-    /* Multi-option XOR pill */
     .mana-xor {
       display: inline-flex; align-items: center; gap: 1px;
       background: color-mix(in srgb, var(--color-text) 6%, transparent);
@@ -173,7 +173,6 @@
     .xor-pip {
       font-size: .68rem; font-weight: 500; color: var(--color-text-muted);
     }
-    /* The greedy-assigned color is bold and full-text colored */
     .xor-pip.xor-assigned {
       font-weight: 800; color: var(--color-text);
     }
@@ -302,6 +301,7 @@
       <div class="actions">
         <button class="btn btn-primary" id="analyzeBtn" type="button">Analyze</button>
         <button class="btn btn-secondary" id="downloadBtn" type="button">Download JSON</button>
+        <button class="btn btn-ghost" id="clearBtn" type="button">Clear</button>
       </div>
       <div id="status" class="status warn">Ready.</div>
     </section>
@@ -336,6 +336,7 @@
     turnsSeen: document.getElementById('turnsSeen'),
     analyzeBtn: document.getElementById('analyzeBtn'),
     downloadBtn: document.getElementById('downloadBtn'),
+    clearBtn: document.getElementById('clearBtn'),
     status: document.getElementById('status'),
     playablePct: document.getElementById('playablePct'),
     playableNote: document.getElementById('playableNote'),
@@ -371,27 +372,19 @@
   }
 
   function renderManaSources(detail) {
-    // detail: [{name, produced_mana: [...], assigned: 'X'}, ...]
     const wrap = document.createElement('span');
     wrap.className = 'mana-sources-wrap';
     detail.forEach((src, i) => {
-      if (i > 0) {
-        const sep = el('span', 'mana-sep', '+');
-        wrap.appendChild(sep);
-      }
+      if (i > 0) wrap.appendChild(el('span', 'mana-sep', '+'));
       const opts = src.produced_mana || [];
       if (opts.length === 1) {
-        // single-color / basic — plain {X} display
-        const pip = el('span', 'mana-cost', `{${opts[0]}}`);
-        wrap.appendChild(pip);
+        wrap.appendChild(el('span', 'mana-cost', `{${opts[0]}}`));
       } else {
-        // multi-option: show XOR pill, bold the assigned color
         const pill = document.createElement('span');
         pill.className = 'mana-xor';
         opts.forEach((c, ci) => {
           if (ci > 0) pill.appendChild(el('span', 'xor-sep', '/'));
-          const pip = el('span', 'xor-pip' + (c === src.assigned ? ' xor-assigned' : ''), c);
-          pill.appendChild(pip);
+          pill.appendChild(el('span', 'xor-pip' + (c === src.assigned ? ' xor-assigned' : ''), c));
         });
         wrap.appendChild(pill);
       }
@@ -409,7 +402,6 @@
     sequences.forEach((seq, i) => {
       const card = el('div', 'tree-card');
 
-      // ── Opening hand strip ──
       const strip = el('div', 'hand-strip');
       strip.appendChild(el('div', 'hand-strip-label', `Hand ${i + 1} — Opening 7`));
       const chips = el('div', 'hand-chips');
@@ -417,7 +409,6 @@
       strip.appendChild(chips);
       card.appendChild(strip);
 
-      // ── Turn nodes ──
       const turnsList = el('div', 'turns-list');
       (seq.turns || []).forEach((t, idx) => {
         const node = el('div', 'turn-node');
@@ -431,7 +422,6 @@
         if (!t.landPlayed && !t.cast) {
           detail.appendChild(el('div', 'no-play', 'No land, no play'));
         } else {
-          // Land row
           if (t.landPlayed) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Land'));
@@ -439,14 +429,12 @@
             if (t.landTapped) r.appendChild(el('span', 'tapped-badge', 'Tapped'));
             detail.appendChild(r);
           }
-          // Mana row — per-source XOR options
           if (t.manaSourcesDetail && t.manaSourcesDetail.length > 0) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Mana'));
             r.appendChild(renderManaSources(t.manaSourcesDetail));
             detail.appendChild(r);
           } else if (t.manaPool && Object.keys(t.manaPool).length > 0) {
-            // fallback: flat pool sum
             const poolStr = Object.entries(t.manaPool)
               .filter(([, v]) => v > 0)
               .map(([k, v]) => `${v}{${k}}`)
@@ -456,7 +444,6 @@
             r.appendChild(el('span', 'mana-cost', poolStr));
             detail.appendChild(r);
           }
-          // Cast row
           if (t.cast) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Cast'));
@@ -541,6 +528,7 @@
   }
 
   els.analyzeBtn.addEventListener('click', analyze);
+
   els.downloadBtn.addEventListener('click', () => {
     if (!lastResult) return setStatus('warn', 'Run analysis before downloading.');
     const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
@@ -550,6 +538,21 @@
     a.click();
     URL.revokeObjectURL(a.href);
   });
+
+  els.clearBtn.addEventListener('click', () => {
+    els.decklist.value = '';
+    els.decklist.focus();
+    lastResult = null;
+    els.playablePct.textContent = '—';
+    els.playableNote.textContent = 'Run analysis.';
+    els.curvePct.textContent = '—';
+    els.playPct.textContent = '—';
+    els.avgMv.textContent = '—';
+    els.profile.innerHTML = '';
+    els.treesContainer.innerHTML = '<div class="empty-trees">Run analysis to see example sequences.</div>';
+    setStatus('warn', 'Ready.');
+  });
+
   els.themeBtn.addEventListener('click', () => {
     const root = document.documentElement;
     root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
