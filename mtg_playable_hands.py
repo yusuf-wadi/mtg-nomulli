@@ -40,36 +40,13 @@ def normalize_name(raw: str) -> str:
 
 
 def lookup_keys(normalized: str) -> list:
-    """Return ordered index keys to try for a normalized card name.
-
-    Handles three separator styles exported by different tools:
-      ' // ' — EDHREC, Archidekt, Scryfall (double-slash with spaces)
-      ' / '  — Moxfield (single-slash with spaces)
-
-    Cases:
-      1. True MDFC (different faces):
-           'valki, god of lies // tibalt, cosmic impostor'
-           -> ['valki, god of lies', 'tibalt, cosmic impostor']
-         Try front face first, fall back to back face.
-
-      2. Repeated-name card (adventure / flip with same name on both sides):
-           'soulherder // soulherder'
-           -> ['soulherder']  (deduplicated)
-
-      3. Moxfield single-slash:
-           'cosima, god of the voyage / the omenkeel'
-           -> ['cosima, god of the voyage', 'the omenkeel']
-
-      4. Plain name: 'counterspell' -> ['counterspell']
-    """
-    # Pick whichever separator is present; prefer ' // ' over ' / '
+    """Return ordered index keys to try for a normalized card name."""
     if ' // ' in normalized:
         sep = ' // '
     elif ' / ' in normalized:
         sep = ' / '
     else:
         return [normalized]
-
     parts = [p.strip() for p in normalized.split(sep)]
     seen = []
     for p in parts:
@@ -130,20 +107,13 @@ def _card_cmc(card: dict) -> float:
 
 def _produced_mana_for_land(card: dict, type_line: str) -> list:
     """
-    Build the full XOR list of mana options a land can produce.
-
-    For pain lands / filter lands / dual-purpose lands Scryfall's
-    produced_mana already lists every color. We preserve that list
-    exactly so the frontend can show the XOR pill.
-
-    We only fall back to subtype inference when produced_mana is empty.
+    Build the full XOR list of mana a land can produce.
+    Scryfall's produced_mana already includes C for pain lands (Underground River etc.).
+    We preserve it exactly; only fall back to subtype inference when empty.
     """
     raw = list(card.get('produced_mana') or [])
-    # Keep C alongside any colors — pain lands produce {C} OR a color.
-    # Scryfall already includes 'C' in produced_mana for pain lands.
     if raw:
         return raw
-    # Fallback: infer from subtype (basic-type duals, e.g. Tropical Island)
     inferred = infer_produced_from_type(type_line)
     return inferred if inferred else ['C']
 
@@ -171,10 +141,7 @@ def ensure_bulk_data():
                 names.add(normalize_name(face['name']))
         type_line = card.get('type_line', '')
         is_land = 'land' in type_line.lower()
-        if is_land:
-            produced = _produced_mana_for_land(card, type_line)
-        else:
-            produced = list(card.get('produced_mana') or [])
+        produced = _produced_mana_for_land(card, type_line) if is_land else list(card.get('produced_mana') or [])
         mana_cost = _card_mana_cost(card)
         cmc = _card_cmc(card)
         compact = {
@@ -347,8 +314,8 @@ def build_mana_pool(lands: list, mana_perms: list, desired: dict) -> tuple:
     """
     Returns (pool, sources_used, sources_detail).
     sources_detail: [{name, produced_mana, assigned}]
-      produced_mana — full XOR list of colors this source can produce
-      assigned      — color the greedy algo picked for this simulation
+      produced_mana - full XOR list of colors this source can produce
+      assigned      - color the greedy algo picked for this simulation
     """
     pool = {'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0}
     sources_used = []
@@ -483,7 +450,6 @@ def hydrate_deck(deck_text: str):
     resolved, missing = [], []
     for item in parsed:
         norm = item['normalized']
-        # Basic land fast-path (check first key of lookup_keys against BASIC_LANDS)
         first_key = lookup_keys(norm)[0]
         if first_key in BASIC_LANDS:
             stub = {
@@ -498,7 +464,6 @@ def hydrate_deck(deck_text: str):
             }
             resolved.append(classify_card(item, stub))
             continue
-        # Try each lookup key in order (handles MDFC, repeated-name, single-slash)
         card = None
         for key in lookup_keys(norm):
             card = index.get(key)
@@ -534,7 +499,7 @@ def analyze(deck_text: str, simulations: int = 10000, turns_seen: int = 3):
             has_play_count += 1
     lands = sum(1 for c in hydrated if c['isLand'])
     mana_perms = sum(1 for c in hydrated if c['isManaPermanent'])
-    nonlands = [c for c in hydrated if not c['isLand']
+    nonlands = [c for c in hydrated if not c['isLand']]
     avg_mv = (sum(c['manaValue'] for c in nonlands) / len(nonlands)) if nonlands else 0
     colors = ''.join(sorted({x for c in hydrated for x in c.get('color_identity', [])})) or 'C'
     tapped_land_count = sum(1 for c in hydrated if c.get('isLand') and c.get('entersTapped'))
