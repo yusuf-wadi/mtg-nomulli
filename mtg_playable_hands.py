@@ -6,8 +6,11 @@ BULK_API = 'https://api.scryfall.com/bulk-data'
 CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
+VERSION_PATH = CACHE_DIR / 'cache_version.txt'
 
-# Basic land subtype -> mana color implied by the rules
+# Bump this whenever index-building logic changes
+CACHE_VERSION = '3'
+
 SUBTYPE_MANA = {
     'plains':   'W',
     'island':   'U',
@@ -28,7 +31,6 @@ def fetch_json(url: str):
 
 
 def infer_produced_from_type(type_line: str):
-    """Derive mana production from land subtypes (e.g. Basic Land - Island -> ['U'])."""
     tl = (type_line or '').lower()
     produced = []
     after_dash = tl.split('\u2014')[-1] if '\u2014' in tl else tl.split('-')[-1]
@@ -39,11 +41,18 @@ def infer_produced_from_type(type_line: str):
     return produced
 
 
+def cache_is_valid() -> bool:
+    if not (BULK_PATH.exists() and INDEX_PATH.exists() and VERSION_PATH.exists()):
+        return False
+    return VERSION_PATH.read_text().strip() == CACHE_VERSION
+
+
 def ensure_bulk_data():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if BULK_PATH.exists() and INDEX_PATH.exists():
+    if cache_is_valid():
         with open(INDEX_PATH, 'r', encoding='utf-8') as f:
             return json.load(f)
+    # Stale or missing — rebuild
     manifest = fetch_json(BULK_API)
     bulk = next((x for x in manifest.get('data', []) if x.get('type') == 'oracle_cards'), None)
     if not bulk:
@@ -75,6 +84,7 @@ def ensure_bulk_data():
             idx.setdefault(n, compact)
     with open(INDEX_PATH, 'w', encoding='utf-8') as f:
         json.dump(idx, f)
+    VERSION_PATH.write_text(CACHE_VERSION)
     return idx
 
 
@@ -134,7 +144,6 @@ def classify_card(entry, card):
 
 
 def parse_decklist(text: str):
-    """Parse decklist, aggregating duplicate card names into correct quantities."""
     counts = {}
     for line in [x.strip() for x in text.splitlines() if x.strip()]:
         m = re.match(r'^(\d+)x?\s+(.*)$', line, flags=re.I)
