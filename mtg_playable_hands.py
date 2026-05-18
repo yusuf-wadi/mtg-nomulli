@@ -7,6 +7,15 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 
+# Basic land subtype -> mana color implied by the rules
+SUBTYPE_MANA = {
+    'plains':   'W',
+    'island':   'U',
+    'swamp':    'B',
+    'mountain': 'R',
+    'forest':   'G',
+}
+
 
 def normalize_name(raw: str) -> str:
     return re.sub(r'\s+', ' ', re.sub(r'\([^)]*\)', '', re.sub(r'^[0-9]+x?\s+', '', raw.lower()))).strip()
@@ -16,6 +25,18 @@ def fetch_json(url: str):
     req = urllib.request.Request(url, headers={'Accept': 'application/json', 'User-Agent': 'MTGPlayableHands/1.0'})
     with urllib.request.urlopen(req, timeout=120) as resp:
         return json.load(resp)
+
+
+def infer_produced_from_type(type_line: str):
+    """Derive mana production from land subtypes (e.g. Basic Land - Island -> ['U'])."""
+    tl = (type_line or '').lower()
+    produced = []
+    after_dash = tl.split('\u2014')[-1] if '\u2014' in tl else tl.split('-')[-1]
+    for sub in after_dash.split():
+        color = SUBTYPE_MANA.get(sub.strip())
+        if color and color not in produced:
+            produced.append(color)
+    return produced
 
 
 def ensure_bulk_data():
@@ -36,14 +57,18 @@ def ensure_bulk_data():
         for face in card.get('card_faces', []) or []:
             if face.get('name'):
                 names.add(normalize_name(face['name']))
+        type_line = card.get('type_line', '')
+        produced = list(card.get('produced_mana') or [])
+        if not produced and 'land' in type_line.lower():
+            produced = infer_produced_from_type(type_line)
         compact = {
             'name': card.get('name', ''),
             'mana_cost': card.get('mana_cost', ''),
             'cmc': card.get('cmc', 0),
-            'type_line': card.get('type_line', ''),
+            'type_line': type_line,
             'colors': card.get('colors') or [],
             'color_identity': card.get('color_identity') or [],
-            'produced_mana': card.get('produced_mana') or [],
+            'produced_mana': produced,
             'card_faces': card.get('card_faces') or []
         }
         for n in names:
@@ -70,13 +95,17 @@ def parse_mana_cost_symbols(mana_cost: str):
 
 def summarize_face_data(card):
     face = (card.get('card_faces') or [None])[0]
+    type_line = card.get('type_line') or (face or {}).get('type_line', '')
+    produced = list(card.get('produced_mana') or [])
+    if not produced and 'land' in type_line.lower():
+        produced = infer_produced_from_type(type_line)
     return {
         'mana_cost': card.get('mana_cost') or (face or {}).get('mana_cost', ''),
         'cmc': card.get('cmc', (face or {}).get('cmc', 0)) or 0,
-        'type_line': card.get('type_line') or (face or {}).get('type_line', ''),
+        'type_line': type_line,
         'colors': card.get('colors') or (face or {}).get('colors', []) or [],
         'color_identity': card.get('color_identity') or [],
-        'produced_mana': card.get('produced_mana') or []
+        'produced_mana': produced
     }
 
 
@@ -86,6 +115,8 @@ def classify_card(entry, card):
     is_land = 'land' in type_line
     is_permanent = any(x in type_line for x in ['artifact', 'creature', 'enchantment', 'planeswalker', 'battle', 'land'])
     produced = [c for c in face['produced_mana'] if c in ['W', 'U', 'B', 'R', 'G', 'C']]
+    if not produced and is_land:
+        produced = infer_produced_from_type(face['type_line'])
     return {
         **entry,
         'name': card.get('name', entry['inputName']),
@@ -103,11 +134,15 @@ def classify_card(entry, card):
 
 
 def parse_decklist(text: str):
-    cards = []
+    """Parse decklist, aggregating duplicate card names into correct quantities."""
+    counts = {}
     for line in [x.strip() for x in text.splitlines() if x.strip()]:
         m = re.match(r'^(\d+)x?\s+(.*)$', line, flags=re.I)
         qty = int(m.group(1)) if m else 1
         name = (m.group(2) if m else line).strip()
+        counts[name] = counts.get(name, 0) + qty
+    cards = []
+    for name, qty in counts.items():
         for _ in range(qty):
             cards.append({'inputName': name, 'normalized': normalize_name(name)})
     return cards
