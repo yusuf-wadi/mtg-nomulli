@@ -1,0 +1,16 @@
+# Scryfall bulk data — downloaded at runtime, never commit
+assets/oracle_cards.json
+assets/oracle_cards_index.json
+assets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db

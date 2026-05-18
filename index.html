@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MTG Playable Hands</title>
+  <link href="https://api.fontshare.com/v2/css?f[]=satoshi@400,500,700&f[]=cabinet-grotesk@500,700&display=swap" rel="stylesheet">
+  <style>
+    :root, [data-theme="light"] {
+      --text-sm: clamp(0.875rem, 0.8rem + 0.35vw, 1rem); --text-base: clamp(1rem, 0.95rem + 0.25vw, 1.125rem); --text-lg: clamp(1.125rem, 1rem + 0.75vw, 1.5rem); --text-xl: clamp(1.5rem, 1.2rem + 1.25vw, 2rem);
+      --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem;
+      --color-bg: #f7f6f2; --color-surface: #f9f8f5; --color-surface-2: #fbfbf9; --color-text: #28251d; --color-text-muted: #7a7974; --color-primary: #01696f; --color-primary-hover: #0c4e54; --color-primary-highlight: #cedcd8; --color-success: #437a22; --color-success-highlight: #d4dfcc; --color-warning: #964219; --color-warning-highlight: #ddcfc6; --color-error: #a12c7b; --color-error-highlight: #e0ced7; --radius: 0.9rem; --radius-full: 9999px; --font-body: 'Satoshi', Inter, sans-serif; --font-display: 'Cabinet Grotesk', 'Satoshi', sans-serif;
+    }
+    [data-theme="dark"] { --color-bg:#171614; --color-surface:#1c1b19; --color-surface-2:#201f1d; --color-text:#cdccca; --color-text-muted:#9a9996; --color-primary:#4f98a3; --color-primary-hover:#227f8b; --color-primary-highlight:#313b3b; --color-success:#6daa45; --color-success-highlight:#3a4435; --color-warning:#bb653b; --color-warning-highlight:#564942; --color-error:#d163a7; --color-error-highlight:#4c3d46; }
+    *{box-sizing:border-box;margin:0;padding:0} body{font:var(--text-base)/1.55 var(--font-body);background:var(--color-bg);color:var(--color-text);padding:var(--space-6)} button,input,textarea{font:inherit;color:inherit} .wrap{max-width:1180px;margin:0 auto} .top{display:flex;justify-content:space-between;align-items:center;gap:var(--space-4);margin-bottom:var(--space-6)} h1{font:700 var(--text-xl)/1.05 var(--font-display)} .muted{color:var(--color-text-muted)} .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:var(--space-6)} .card{background:var(--color-surface);border:1px solid color-mix(in srgb,var(--color-text) 10%,transparent);border-radius:var(--radius);padding:var(--space-5)} textarea,input{width:100%;background:var(--color-surface-2);border:1px solid color-mix(in srgb,var(--color-text) 12%,transparent);border-radius:calc(var(--radius) - 0.2rem);padding:var(--space-4)} textarea{min-height:28rem;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace} label{display:block;font-size:var(--text-sm);font-weight:700;margin-bottom:var(--space-2)} .controls,.stats{display:grid;gap:var(--space-4)} .controls{grid-template-columns:repeat(2,minmax(0,1fr));margin-top:var(--space-4)} .actions{display:flex;gap:var(--space-3);margin-top:var(--space-5);flex-wrap:wrap} .btn{min-height:44px;padding:0 var(--space-5);border-radius:var(--radius-full);border:1px solid transparent;cursor:pointer} .btn-primary{background:var(--color-primary);color:#fff}.btn-primary:hover{background:var(--color-primary-hover)} .btn-secondary{background:var(--color-surface-2);border-color:color-mix(in srgb,var(--color-text) 12%,transparent)} .stats{grid-template-columns:repeat(2,minmax(0,1fr))} .stat{background:var(--color-surface-2);border:1px solid color-mix(in srgb,var(--color-text) 10%,transparent);border-radius:calc(var(--radius) - 0.2rem);padding:var(--space-4)} .eyebrow{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--color-text-muted)} .value{font:700 var(--text-lg)/1 var(--font-display);margin-top:var(--space-2)} .note{font-size:var(--text-sm);color:var(--color-text-muted);margin-top:var(--space-2)} .status{margin-top:var(--space-4);padding:var(--space-4);border-radius:calc(var(--radius) - 0.2rem);font-size:var(--text-sm)} .ok{background:var(--color-success-highlight);color:var(--color-success)} .warn{background:var(--color-warning-highlight);color:var(--color-warning)} .err{background:var(--color-error-highlight);color:var(--color-error)} table{width:100%;border-collapse:collapse;margin-top:var(--space-4)} th,td{text-align:left;padding:.8rem 0;border-bottom:1px solid color-mix(in srgb,var(--color-text) 10%,transparent);vertical-align:top} th{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--color-text-muted)} @media (max-width:900px){.grid,.controls,.stats{grid-template-columns:1fr} textarea{min-height:18rem}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>MTG Playable Hands</h1>
+        <div class="muted">Paste a Commander decklist and analyze turn-3 playability.</div>
+      </div>
+      <button class="btn btn-secondary" id="themeBtn" type="button">Theme</button>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <label for="decklist">Decklist</label>
+        <textarea id="decklist">1 Sol Ring
+1 Arcane Signet
+1 Fellwar Stone
+1 Nature's Lore
+1 Farseek
+1 Rampant Growth
+1 Cultivate
+1 Kodama's Reach
+1 Command Tower
+1 Exotic Orchard
+1 Breeding Pool
+1 Temple Garden
+1 Hallowed Fountain
+1 Windswept Heath
+1 Misty Rainforest
+1 Flooded Strand
+1 Forest
+1 Forest
+1 Forest
+1 Forest
+1 Island
+1 Island
+1 Island
+1 Plains
+1 Plains
+1 Plains
+1 Reliquary Tower
+1 Swords to Plowshares
+1 Path to Exile
+1 Beast Within
+1 Swan Song
+1 Counterspell
+1 Teferi's Protection
+1 Rhystic Study
+1 Mystic Remora
+1 Smothering Tithe
+1 Guardian Project
+1 Esper Sentinel
+1 Birds of Paradise
+1 Llanowar Elves
+1 Elvish Mystic
+1 Avacyn's Pilgrim
+1 Bloom Tender
+1 Faeburrow Elder
+1 Eternal Witness
+1 Tireless Tracker
+1 Beast Whisperer
+1 Shalai, Voice of Plenty
+1 Seedborn Muse
+1 Consecrated Sphinx
+1 Finale of Devastation
+1 Cyclonic Rift
+1 Austere Command
+1 Farewell
+1 Spara's Headquarters
+1 Glacial Fortress
+1 Hinterland Harbor
+1 Sunpetal Grove
+1 Yavimaya Coast
+1 Adarkar Wastes
+1 Brushland
+1 Command Beacon
+1 Reflecting Pool
+1 Boseiju, Who Endures
+1 Otawara, Soaring City
+1 Eiganjo, Seat of the Empire
+1 Ponder
+1 Brainstorm
+1 Selesnya Signet
+1 Simic Signet
+1 Azorius Signet
+1 Talisman of Curiosity
+1 Talisman of Progress
+1 Talisman of Unity
+1 Mirari's Wake
+1 Enlightened Tutor
+1 Worldly Tutor
+1 Mystical Tutor
+1 Heroic Intervention
+1 Tamiyo's Safekeeping
+1 Nature's Claim
+1 Generous Gift
+1 Arcane Denial
+1 Dovin's Veto
+1 Teferi, Time Raveler
+1 Narset, Parter of Veils
+1 Skyshroud Claim
+1 Three Visits
+1 Dryad of the Ilysian Grove
+1 Lotus Cobra
+1 Oracle of Mul Daya
+1 The Great Henge
+1 Eladamri's Call
+1 Finale of Revelation
+1 Winds of Abandon
+1 Sylvan Library</textarea>
+        <div class="controls">
+          <div>
+            <label for="simulations">Simulations</label>
+            <input id="simulations" type="number" min="1000" step="1000" value="10000">
+          </div>
+          <div>
+            <label for="turnsSeen">Extra draws</label>
+            <input id="turnsSeen" type="number" min="0" max="3" step="1" value="3">
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" id="analyzeBtn" type="button">Analyze</button>
+          <button class="btn btn-secondary" id="downloadBtn" type="button">Download JSON</button>
+        </div>
+        <div id="status" class="status warn">Ready.</div>
+      </section>
+
+      <aside class="card">
+        <div class="stats">
+          <div class="stat"><div class="eyebrow">Playable hands</div><div class="value" id="playablePct">—</div><div class="note" id="playableNote">Run analysis.</div></div>
+          <div class="stat"><div class="eyebrow">Curve rate</div><div class="value" id="curvePct">—</div><div class="note">On or above curve through turn 3.</div></div>
+          <div class="stat"><div class="eyebrow">Has a play</div><div class="value" id="playPct">—</div><div class="note">Castable by turn 3.</div></div>
+          <div class="stat"><div class="eyebrow">Average MV</div><div class="value" id="avgMv">—</div><div class="note">Across nonlands.</div></div>
+        </div>
+        <table>
+          <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+          <tbody id="profile"></tbody>
+        </table>
+      </aside>
+    </div>
+  </div>
+
+  <script>
+    let lastResult = null;
+    const els = {
+      decklist: document.getElementById('decklist'), simulations: document.getElementById('simulations'), turnsSeen: document.getElementById('turnsSeen'), analyzeBtn: document.getElementById('analyzeBtn'), downloadBtn: document.getElementById('downloadBtn'), status: document.getElementById('status'), playablePct: document.getElementById('playablePct'), playableNote: document.getElementById('playableNote'), curvePct: document.getElementById('curvePct'), playPct: document.getElementById('playPct'), avgMv: document.getElementById('avgMv'), profile: document.getElementById('profile'), themeBtn: document.getElementById('themeBtn')
+    };
+
+    function setStatus(kind, text) {
+      els.status.className = `status ${kind}`;
+      els.status.textContent = text;
+    }
+
+    async function analyze() {
+      setStatus('warn', 'Running analysis...');
+      els.analyzeBtn.disabled = true;
+      try {
+        const payload = {
+          decklist: els.decklist.value,
+          simulations: Number(els.simulations.value || 10000),
+          turns_seen: Number(els.turnsSeen.value || 3)
+        };
+        const res = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || 'Analysis failed');
+        lastResult = result;
+        els.playablePct.textContent = `${result.results.playableHandsPct.toFixed(1)}%`;
+        els.playableNote.textContent = `${result.deckSize} resolved cards.`;
+        els.curvePct.textContent = `${result.results.onOrAboveCurveThroughTurn3Pct.toFixed(1)}%`;
+        els.playPct.textContent = `${result.results.hasPlayableSpellByTurn3Pct.toFixed(1)}%`;
+        els.avgMv.textContent = Number(result.averageNonlandManaValue || 0).toFixed(2);
+        const rows = [
+          ['Deck size', result.deckSize],
+          ['Color identity', result.colorIdentity],
+          ['Lands', result.lands],
+          ['Mana permanents', result.manaPermanents],
+          ['Simulations', result.simulations],
+          ['Missing cards', result.missing.length ? result.missing.slice(0,6).join(', ') : 'None']
+        ];
+        els.profile.innerHTML = rows.map(([a,b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join('');
+        setStatus(result.missing.length ? 'warn' : 'ok', result.missing.length ? `Analysis complete. Missing ${result.missing.length} unmatched card(s).` : 'Analysis complete.');
+      } catch (err) {
+        setStatus('err', err.message || 'Analysis failed.');
+      } finally {
+        els.analyzeBtn.disabled = false;
+      }
+    }
+
+    els.analyzeBtn.addEventListener('click', analyze);
+    els.downloadBtn.addEventListener('click', () => {
+      if (!lastResult) return setStatus('warn', 'Run analysis before downloading.');
+      const blob = new Blob([JSON.stringify(lastResult, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'mtg-playable-hands-result.json'; a.click(); URL.revokeObjectURL(a.href);
+    });
+    els.themeBtn.addEventListener('click', () => {
+      const root = document.documentElement;
+      root.setAttribute('data-theme', root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    });
+  </script>
+</body>
+</html>
