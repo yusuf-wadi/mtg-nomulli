@@ -9,7 +9,7 @@ INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
 
 # Bump this whenever index-building logic changes
-CACHE_VERSION = '3'
+CACHE_VERSION = '4'
 
 SUBTYPE_MANA = {
     'plains':   'W',
@@ -31,8 +31,10 @@ def fetch_json(url: str):
 
 
 def infer_produced_from_type(type_line: str):
+    """Always infer mana production from type line subtypes (e.g. Basic Land — Island -> ['U'])."""
     tl = (type_line or '').lower()
     produced = []
+    # Split on em-dash or regular dash to get subtypes
     after_dash = tl.split('\u2014')[-1] if '\u2014' in tl else tl.split('-')[-1]
     for sub in after_dash.split():
         color = SUBTYPE_MANA.get(sub.strip())
@@ -67,9 +69,14 @@ def ensure_bulk_data():
             if face.get('name'):
                 names.add(normalize_name(face['name']))
         type_line = card.get('type_line', '')
+        # Always infer produced_mana from type line for lands
+        # Scryfall bulk data has produced_mana=null for basic lands
         produced = list(card.get('produced_mana') or [])
-        if not produced and 'land' in type_line.lower():
-            produced = infer_produced_from_type(type_line)
+        if 'land' in type_line.lower():
+            inferred = infer_produced_from_type(type_line)
+            for c in inferred:
+                if c not in produced:
+                    produced.append(c)
         compact = {
             'name': card.get('name', ''),
             'mana_cost': card.get('mana_cost', ''),
@@ -106,9 +113,13 @@ def parse_mana_cost_symbols(mana_cost: str):
 def summarize_face_data(card):
     face = (card.get('card_faces') or [None])[0]
     type_line = card.get('type_line') or (face or {}).get('type_line', '')
+    # Start from stored produced_mana, then always supplement with type-line inference for lands
     produced = list(card.get('produced_mana') or [])
-    if not produced and 'land' in type_line.lower():
-        produced = infer_produced_from_type(type_line)
+    if 'land' in type_line.lower():
+        inferred = infer_produced_from_type(type_line)
+        for c in inferred:
+            if c not in produced:
+                produced.append(c)
     return {
         'mana_cost': card.get('mana_cost') or (face or {}).get('mana_cost', ''),
         'cmc': card.get('cmc', (face or {}).get('cmc', 0)) or 0,
@@ -125,6 +136,7 @@ def classify_card(entry, card):
     is_land = 'land' in type_line
     is_permanent = any(x in type_line for x in ['artifact', 'creature', 'enchantment', 'planeswalker', 'battle', 'land'])
     produced = [c for c in face['produced_mana'] if c in ['W', 'U', 'B', 'R', 'G', 'C']]
+    # Final safety net: if still empty and it's a land, infer from type line
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     return {
