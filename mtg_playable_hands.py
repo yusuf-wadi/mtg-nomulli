@@ -7,7 +7,7 @@ CACHE_DIR = Path('/tmp/mtg_cache')
 BULK_PATH = CACHE_DIR / 'oracle_cards.json'
 INDEX_PATH = CACHE_DIR / 'oracle_cards_index.json'
 VERSION_PATH = CACHE_DIR / 'cache_version.txt'
-CACHE_VERSION = '17'
+CACHE_VERSION = '18'
 
 # Only layouts that can legally appear in a Commander (or any) deck.
 # Everything else (tokens, emblems, art series, vanguards, planes, schemes,
@@ -144,10 +144,8 @@ def _is_commander_legal(card: dict) -> bool:
     if layout not in COMMANDER_LEGAL_LAYOUTS:
         return False
     type_line = _card_type_line(card).lower()
-    # Must have a non-empty type line
     if not type_line:
         return False
-    # Must not be a game object that lives outside a deck
     for bad in ILLEGAL_TYPE_SUBSTRINGS:
         if bad in type_line:
             return False
@@ -194,8 +192,11 @@ def ensure_bulk_data():
             'card_faces': card.get('card_faces') or [],
             'entersTapped': _enters_tapped(card),
         }
+        # Direct assignment: last valid entry wins, so canonical oracle entries
+        # always overwrite any earlier duplicate key (e.g. a same-name face from
+        # an art-series or reversible reprint that slipped through).
         for n in names:
-            idx.setdefault(n, compact)
+            idx[n] = compact
     with open(INDEX_PATH, 'w', encoding='utf-8') as f:
         json.dump(idx, f)
     VERSION_PATH.write_text(CACHE_VERSION)
@@ -249,10 +250,6 @@ def effective_cmc(cost_symbols: dict) -> int:
 
 
 def summarize_face_data(card, raw_card=None):
-    """
-    Extract mana cost, type, and produced mana from a card or its first face.
-    raw_card: the original unprocessed card dict, used as fallback for type_line.
-    """
     face = (card.get('card_faces') or [None])[0]
     type_line = (card.get('type_line') or '').strip()
     if not type_line and face:
@@ -313,7 +310,7 @@ def classify_card(entry, card):
     if not produced and is_land:
         produced = infer_produced_from_type(face['type_line'])
     if not produced and is_land:
-        produced = ['C']  # every land produces at least colorless
+        produced = ['C']
     cost_symbols = parse_mana_cost_symbols(face['mana_cost'])
     scryfall_cmc = face['cmc']
     eff_cmc = effective_cmc(cost_symbols)
@@ -412,11 +409,6 @@ def desired_from_hand(hand: list) -> dict:
 
 
 def is_spell(card: dict) -> bool:
-    """
-    True only for cards that can actually be cast as a spell.
-    Excludes: lands, and any zero-cost card with no mana cost string
-    (which catches un-classified lands that slipped through).
-    """
     if card.get('isLand'):
         return False
     if not card.get('mana_cost') and card.get('manaValue', 0) == 0:
