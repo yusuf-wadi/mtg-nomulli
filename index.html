@@ -141,6 +141,14 @@
       flex-shrink: 0;
     }
     .mana-cost { font-family: var(--font-mono); font-size: .75rem; color: var(--color-text-muted); flex-shrink: 0; }
+    /* Tapped land indicator */
+    .tapped-badge {
+      font-size: .64rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+      background: color-mix(in srgb, var(--color-warning) 15%, var(--color-surface));
+      color: var(--color-warning);
+      padding: 1px 5px; border-radius: var(--radius-full);
+      flex-shrink: 0;
+    }
 
     .empty-trees { padding: var(--space-8) 0; text-align: center; color: var(--color-text-muted); font-size: var(--text-sm); }
 
@@ -314,7 +322,6 @@
   const BADGE_CLASS = ['t1', 't2', 't3'];
   const TURN_LABEL = ['T1', 'T2', 'T3'];
 
-  // Known land names for chip colouring (rough heuristic)
   const LAND_WORDS = ['island', 'plains', 'forest', 'mountain', 'swamp', 'tower', 'pool', 'haven', 'reach',
     'land', 'gate', 'grove', 'hearth', 'moor', 'strand', 'heath', 'mine', 'vista', 'mesa', 'lagoon',
     'headquarters', 'fortress', 'harbor', 'wastes', 'beacon', 'coast', 'expanse'];
@@ -347,13 +354,9 @@
 
       // ── Opening hand strip ──
       const strip = el('div', 'hand-strip');
-      const stripLabel = el('div', 'hand-strip-label', `Hand ${i + 1} — Opening 7`);
+      strip.appendChild(el('div', 'hand-strip-label', `Hand ${i + 1} — Opening 7`));
       const chips = el('div', 'hand-chips');
-      (seq.openingHand || []).forEach(name => {
-        const chip = el('span', `chip ${chipClass(name)}`, name);
-        chips.appendChild(chip);
-      });
-      strip.appendChild(stripLabel);
+      (seq.openingHand || []).forEach(name => chips.appendChild(el('span', `chip ${chipClass(name)}`, name)));
       strip.appendChild(chips);
       card.appendChild(strip);
 
@@ -364,25 +367,25 @@
         if (idx > 0) node.appendChild(el('div', 'turn-connector'));
 
         const row = el('div', 'turn-row');
-        const badge = el('div', `turn-badge ${BADGE_CLASS[idx]}`, TURN_LABEL[idx]);
-        row.appendChild(badge);
+        row.appendChild(el('div', `turn-badge ${BADGE_CLASS[idx]}`, TURN_LABEL[idx]));
 
         const detail = el('div', 'turn-detail');
 
         if (!t.landPlayed && !t.cast) {
           detail.appendChild(el('div', 'no-play', 'No land, no play'));
         } else {
-          // Land played
+          // Land row — show TAPPED badge if the land enters tapped
           if (t.landPlayed) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Land'));
             r.appendChild(el('span', 'detail-value', t.landPlayed));
+            if (t.landTapped) r.appendChild(el('span', 'tapped-badge', 'Tapped'));
             detail.appendChild(r);
           }
           // Mana pool
           if (t.manaPool && Object.keys(t.manaPool).length > 0) {
             const poolStr = Object.entries(t.manaPool)
-              .filter(([,v]) => v > 0)
+              .filter(([, v]) => v > 0)
               .map(([k, v]) => `${v}{${k}}`)
               .join(' ');
             const r = el('div', 'detail-row');
@@ -394,8 +397,7 @@
           if (t.cast) {
             const r = el('div', 'detail-row');
             r.appendChild(el('span', 'detail-label', 'Cast'));
-            const castName = el('span', 'cast-value', t.cast.name);
-            r.appendChild(castName);
+            r.appendChild(el('span', 'cast-value', t.cast.name));
             if (t.cast.manaCost) r.appendChild(el('span', 'mana-cost', t.cast.manaCost));
             r.appendChild(el('span', 'mv-badge', `MV ${t.cast.mv}`));
             detail.appendChild(r);
@@ -453,6 +455,7 @@
         ['Deck size', result.deckSize],
         ['Color identity', result.colorIdentity],
         ['Lands', result.lands],
+        ['Tapped lands', result.tappedLands ?? '—'],
         ['Mana permanents', result.manaPermanents],
         ['Simulations', result.simulations],
         ['Missing cards', result.missing.length ? result.missing.slice(0, 6).join(', ') : 'None']
