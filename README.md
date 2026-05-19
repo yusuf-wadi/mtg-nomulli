@@ -1,24 +1,15 @@
-# mtg-nomulli
+# mtg-nomulli — moved
 
-MTG opening hand playability analyzer for Commander decklists.
+This project has been consolidated into [**mtg-oracle**](https://github.com/yusuf-wadi/mtg-oracle), now a multi-mode Commander deck dashboard.
 
-Paste a decklist, run Monte Carlo simulations, and get turn-3 playability stats backed by real Scryfall card data.
+**Live app:** https://mtg-oracle-five.vercel.app
 
-## Live app
+The playability analyzer (Monte Carlo opening hands, curve coverage, castable-by-turn-3) is now one of three modes:
 
-Deployed on Vercel — see the repo for the URL.
+- **Upgrades & Cuts** — score a purchase list against your decks
+- **Deck Radar** — visualize a deck across 12 mechanical axis families
+- **Playability** — the original nomulli analyzer
 
-## Local (Windows)
+All three share one deck source (Moxfield/Archidekt username, deck filter, extra deck URLs).
 
-```bat
-run.bat
-```
-
-Then open http://127.0.0.1:8000
-
-## How it works
-
-- Downloads Scryfall oracle_cards bulk data on first run (cached in `/tmp/mtg_cache`)
-- Simulates 10,000 shuffled opening hands
-- Evaluates curve coverage and castable plays through turn 3
-- Returns playable-hand %, curve rate, and castable-by-turn-3 rate
+The source code in this repo is preserved as-is for history. Future development happens in mtg-oracle.
